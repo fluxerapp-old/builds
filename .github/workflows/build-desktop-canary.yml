@@ -1,0 +1,173 @@
+name: Build Desktop App (Canary)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-desktop-canary
+  cancel-in-progress: true
+
+env:
+  CHANNEL: canary
+
+jobs:
+  build:
+    name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            arch: x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle: msi,nsis
+          - platform: windows
+            arch: arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            bundle: msi,nsis
+          - platform: macos
+            arch: universal
+            os: macos-latest
+            target: universal-apple-darwin
+            bundle: dmg
+          - platform: linux
+            arch: x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundle: appimage
+          - platform: linux
+            arch: arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundle: appimage
+
+    steps:
+      - name: Setup SSH key for private repo
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Clone private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: fluxer_app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: fluxer_app
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare wrapper
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: canary
+        run: pnpm prepare:wrapper
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: fluxer_app/src-tauri -> target
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_CHANNEL: canary
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: fluxer_app
+          tauriScript: pnpm tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundle }} --config src-tauri/tauri.conf.canary.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            fluxer_app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*
+          retention-days: 30
+
+  upload:
+    name: Upload builds to S3
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      AWS_S3_ENDPOINT: https://s3.us-east-va.io.cloud.ovh.us
+      AWS_S3_BUCKET: fluxer-dl
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Upload all builds to S3
+        run: |
+          # Windows x64
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-x64/nsis/fluxer_*_x64-setup.exe \
+            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/x64/fluxer.exe \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/vnd.microsoft.portable-executable
+
+          # Windows ARM64
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-arm64/nsis/fluxer_*_arm64-setup.exe \
+            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/arm64/fluxer.exe \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/vnd.microsoft.portable-executable
+
+          # macOS Universal
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-macos-universal/dmg/fluxer_*_universal.dmg \
+            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/macos/universal/fluxer.dmg \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/x-apple-diskimage
+
+          # Linux x64
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-x64/appimage/fluxer_*_amd64.AppImage \
+            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/x64/fluxer.AppImage \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/x-executable
+
+          # Linux ARM64
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/fluxer_*_arm64.AppImage \
+            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/arm64/fluxer.AppImage \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/x-executable

@@ -113,12 +113,17 @@ jobs:
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundle }} --config src-tauri/tauri.conf.canary.json
 
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p upload_staging
+          cp -r fluxer_app/src-tauri/target/${{ matrix.target }}/release/bundle/* upload_staging/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            fluxer_app/src-tauri/target/${{ matrix.target }}/release/bundle/**/*
+          path: upload_staging/
           retention-days: 30
 
   upload:

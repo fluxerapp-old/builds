@@ -143,33 +143,34 @@ jobs:
           path: artifacts
 
       - name: Upload all builds to S3
+        shell: bash
         run: |
           # Windows x64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-x64/nsis/fluxer_*_x64-setup.exe \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-x64/nsis/"Fluxer Canary"_*_x64-setup.exe \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/x64/fluxer.exe \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/vnd.microsoft.portable-executable
 
           # Windows ARM64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-arm64/nsis/fluxer_*_arm64-setup.exe \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-arm64/nsis/"Fluxer Canary"_*_arm64-setup.exe \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/arm64/fluxer.exe \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/vnd.microsoft.portable-executable
 
           # macOS Universal
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-macos-universal/dmg/fluxer_*_universal.dmg \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-macos-universal/dmg/"Fluxer Canary"_*_universal.dmg \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/macos/universal/fluxer.dmg \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-apple-diskimage
 
           # Linux x64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-x64/appimage/fluxer_*_amd64.AppImage \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-x64/appimage/"Fluxer Canary"_*_amd64.AppImage \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/x64/fluxer.AppImage \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-executable
 
           # Linux ARM64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/fluxer_*_arm64.AppImage \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/"Fluxer Canary"_*_arm64.AppImage \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/arm64/fluxer.AppImage \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-executable

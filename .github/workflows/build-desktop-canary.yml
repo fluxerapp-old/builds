@@ -137,6 +137,17 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
     steps:
+      - name: Setup SSH key for private repo
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Clone private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -145,32 +156,108 @@ jobs:
       - name: Upload all builds to S3
         shell: bash
         run: |
-          # Windows x64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-x64/nsis/"Fluxer Canary"_*_x64-setup.exe \
-            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/x64/fluxer.exe \
+          set -euo pipefail
+
+          CHANNEL="${CHANNEL}"
+
+          VERSION=$(python -c "import json; print(json.load(open('fluxer_app/src-tauri/tauri.conf.canary.json'))['version'])")
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          WIN_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-x64/nsis"
+          WIN_X64_SETUP=$(ls "${WIN_X64_DIR}"/"Fluxer Canary"_*_x64-setup.exe)
+          WIN_X64_SIG_FILE="${WIN_X64_SETUP}.sig"
+          WIN_X64_SIG=$(tr -d '\n' < "${WIN_X64_SIG_FILE}")
+
+          WIN_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-arm64/nsis"
+          WIN_ARM64_SETUP=$(ls "${WIN_ARM64_DIR}"/"Fluxer Canary"_*_arm64-setup.exe)
+          WIN_ARM64_SIG_FILE="${WIN_ARM64_SETUP}.sig"
+          WIN_ARM64_SIG=$(tr -d '\n' < "${WIN_ARM64_SIG_FILE}")
+
+          MAC_DMG_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/dmg"
+          MAC_DMG=$(ls "${MAC_DMG_DIR}"/"Fluxer Canary"_*_universal.dmg)
+
+          MAC_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/macos"
+          MAC_TARGZ=$(ls "${MAC_DIR}"/*.app.tar.gz)
+          MAC_SIG_FILE="${MAC_TARGZ}.sig"
+          MAC_SIG=$(tr -d '\n' < "${MAC_SIG_FILE}")
+
+          LINUX_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-x64/appimage"
+          LINUX_X64_APPIMAGE=$(ls "${LINUX_X64_DIR}"/*.AppImage)
+          LINUX_X64_SIG_FILE="${LINUX_X64_APPIMAGE}.sig"
+          LINUX_X64_SIG=$(tr -d '\n' < "${LINUX_X64_SIG_FILE}")
+
+          LINUX_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-arm64/appimage"
+          LINUX_ARM64_APPIMAGE=$(ls "${LINUX_ARM64_DIR}"/*.AppImage)
+          LINUX_ARM64_SIG_FILE="${LINUX_ARM64_APPIMAGE}.sig"
+          LINUX_ARM64_SIG=$(tr -d '\n' < "${LINUX_ARM64_SIG_FILE}")
+
+          aws s3 cp "${WIN_X64_SETUP}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/windows/x64/fluxer.exe \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/vnd.microsoft.portable-executable
 
-          # Windows ARM64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-windows-arm64/nsis/"Fluxer Canary"_*_arm64-setup.exe \
-            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/windows/arm64/fluxer.exe \
+          aws s3 cp "${WIN_ARM64_SETUP}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/windows/arm64/fluxer.exe \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/vnd.microsoft.portable-executable
 
-          # macOS Universal
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-macos-universal/dmg/"Fluxer Canary"_*_universal.dmg \
-            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/macos/universal/fluxer.dmg \
+          aws s3 cp "${MAC_DMG}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/macos/universal/fluxer.dmg \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-apple-diskimage
 
-          # Linux x64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-x64/appimage/"Fluxer Canary"_*_amd64.AppImage \
-            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/x64/fluxer.AppImage \
+          aws s3 cp "${MAC_TARGZ}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/macos/universal/fluxer.app.tar.gz \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/gzip
+
+          aws s3 cp "${LINUX_X64_APPIMAGE}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/linux/x64/fluxer.AppImage \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-executable
 
-          # Linux ARM64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/"Fluxer Canary"_*_aarch64.AppImage \
-            s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/arm64/fluxer.AppImage \
+          aws s3 cp "${LINUX_ARM64_APPIMAGE}" \
+            s3://${AWS_S3_BUCKET}/${CHANNEL}/linux/arm64/fluxer.AppImage \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-executable
+
+          LATEST_JSON_PATH="latest.json"
+
+          cat > "${LATEST_JSON_PATH}" <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "windows-x86_64": {
+                "url": "https://api.fluxer.app/dl/windows/x64/setup?channel=${CHANNEL}",
+                "signature": "${WIN_X64_SIG}"
+              },
+              "windows-aarch64": {
+                "url": "https://api.fluxer.app/dl/windows/arm64/setup?channel=${CHANNEL}",
+                "signature": "${WIN_ARM64_SIG}"
+              },
+              "darwin-x86_64": {
+                "url": "https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=${CHANNEL}",
+                "signature": "${MAC_SIG}"
+              },
+              "darwin-aarch64": {
+                "url": "https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=${CHANNEL}",
+                "signature": "${MAC_SIG}"
+              },
+              "linux-x86_64": {
+                "url": "https://api.fluxer.app/dl/linux/x64/appimage?channel=${CHANNEL}",
+                "signature": "${LINUX_X64_SIG}"
+              },
+              "linux-aarch64": {
+                "url": "https://api.fluxer.app/dl/linux/arm64/appimage?channel=${CHANNEL}",
+                "signature": "${LINUX_ARM64_SIG}"
+              }
+            }
+          }
+          EOF
+
+          aws s3 cp "${LATEST_JSON_PATH}" \
+            s3://${AWS_S3_BUCKET}/desktop/${CHANNEL}/latest.json \
+            --endpoint-url ${AWS_S3_ENDPOINT} \
+            --content-type application/json

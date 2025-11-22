@@ -170,7 +170,7 @@ jobs:
             --content-type application/x-executable
 
           # Linux ARM64
-          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/"Fluxer Canary"_*_arm64.AppImage \
+          aws s3 cp artifacts/fluxer-desktop-${{ env.CHANNEL }}-linux-arm64/appimage/"Fluxer Canary"_*_aarch64.AppImage \
             s3://${AWS_S3_BUCKET}/${{ env.CHANNEL }}/linux/arm64/fluxer.AppImage \
             --endpoint-url ${AWS_S3_ENDPOINT} \
             --content-type application/x-executable

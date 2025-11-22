@@ -32,7 +32,7 @@ jobs:
             arch: universal
             os: macos-latest
             target: universal-apple-darwin
-            bundle: dmg
+            bundle: app,dmg
           - platform: linux
             arch: x64
             os: ubuntu-22.04
@@ -157,38 +157,56 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob
 
           CHANNEL="${CHANNEL}"
 
           VERSION=$(python -c "import json; print(json.load(open('fluxer_app/src-tauri/tauri.conf.json'))['version'])")
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+          find_one() {
+            local dir="$1"
+            local pattern="$2"
+            local file
+            file=$(find "${dir}" -maxdepth 1 -type f -name "${pattern}" | head -n 1)
+            if [[ -z "${file}" ]]; then
+              echo "Missing artifact matching ${dir}/${pattern}" >&2
+              exit 1
+            fi
+            echo "${file}"
+          }
+
           WIN_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-x64/nsis"
-          WIN_X64_SETUP=$(ls "${WIN_X64_DIR}"/Fluxer_*_x64-setup.exe)
+          WIN_X64_SETUP=$(find_one "${WIN_X64_DIR}" "*_x64-setup.exe")
           WIN_X64_SIG_FILE="${WIN_X64_SETUP}.sig"
+          [[ -f "${WIN_X64_SIG_FILE}" ]] || { echo "Missing signature ${WIN_X64_SIG_FILE}" >&2; exit 1; }
           WIN_X64_SIG=$(tr -d '\n' < "${WIN_X64_SIG_FILE}")
 
           WIN_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-arm64/nsis"
-          WIN_ARM64_SETUP=$(ls "${WIN_ARM64_DIR}"/Fluxer_*_arm64-setup.exe)
+          WIN_ARM64_SETUP=$(find_one "${WIN_ARM64_DIR}" "*_arm64-setup.exe")
           WIN_ARM64_SIG_FILE="${WIN_ARM64_SETUP}.sig"
+          [[ -f "${WIN_ARM64_SIG_FILE}" ]] || { echo "Missing signature ${WIN_ARM64_SIG_FILE}" >&2; exit 1; }
           WIN_ARM64_SIG=$(tr -d '\n' < "${WIN_ARM64_SIG_FILE}")
 
           MAC_DMG_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/dmg"
-          MAC_DMG=$(ls "${MAC_DMG_DIR}"/Fluxer_*_universal.dmg)
+          MAC_DMG=$(find_one "${MAC_DMG_DIR}" "*_universal.dmg")
 
           MAC_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/macos"
-          MAC_TARGZ=$(ls "${MAC_DIR}"/*.app.tar.gz)
+          MAC_TARGZ=$(find_one "${MAC_DIR}" "*.app.tar.gz")
           MAC_SIG_FILE="${MAC_TARGZ}.sig"
+          [[ -f "${MAC_SIG_FILE}" ]] || { echo "Missing signature ${MAC_SIG_FILE}" >&2; exit 1; }
           MAC_SIG=$(tr -d '\n' < "${MAC_SIG_FILE}")
 
           LINUX_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-x64/appimage"
-          LINUX_X64_APPIMAGE=$(ls "${LINUX_X64_DIR}"/*.AppImage)
+          LINUX_X64_APPIMAGE=$(find_one "${LINUX_X64_DIR}" "*.AppImage")
           LINUX_X64_SIG_FILE="${LINUX_X64_APPIMAGE}.sig"
+          [[ -f "${LINUX_X64_SIG_FILE}" ]] || { echo "Missing signature ${LINUX_X64_SIG_FILE}" >&2; exit 1; }
           LINUX_X64_SIG=$(tr -d '\n' < "${LINUX_X64_SIG_FILE}")
 
           LINUX_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-arm64/appimage"
-          LINUX_ARM64_APPIMAGE=$(ls "${LINUX_ARM64_DIR}"/*.AppImage)
+          LINUX_ARM64_APPIMAGE=$(find_one "${LINUX_ARM64_DIR}" "*.AppImage")
           LINUX_ARM64_SIG_FILE="${LINUX_ARM64_APPIMAGE}.sig"
+          [[ -f "${LINUX_ARM64_SIG_FILE}" ]] || { echo "Missing signature ${LINUX_ARM64_SIG_FILE}" >&2; exit 1; }
           LINUX_ARM64_SIG=$(tr -d '\n' < "${LINUX_ARM64_SIG_FILE}")
 
           aws s3 cp "${WIN_X64_SETUP}" \

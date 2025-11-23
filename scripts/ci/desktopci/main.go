@@ -68,10 +68,10 @@ func usage() {
   desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
-// bump: increments v0.xxx tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
+// bump: increments v0.x.0 tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
 func cmdBump() error {
 	tagGlob := envOr("TAG_GLOB", "v0.*")
-	tagPrefix := envOr("TAG_PREFIX", "v0.")
+	tagPrefix := envOr("TAG_PREFIX", "v")
 
 	if err := gitFetchTags(); err != nil {
 		return err
@@ -79,13 +79,16 @@ func cmdBump() error {
 
 	latest, _ := latestTag(tagGlob)
 	num := 0
-	if latest != "" && strings.HasPrefix(latest, tagPrefix) {
+	if latest != "" {
 		trimmed := strings.TrimPrefix(latest, tagPrefix)
-		fmt.Sscanf(trimmed, "%d", &num)
+		parts := strings.Split(trimmed, ".")
+		if len(parts) >= 2 {
+			fmt.Sscanf(parts[1], "%d", &num)
+		}
 	}
 	num++
-	next := fmt.Sprintf("%03d", num)
-	version := "0." + next
+	version := fmt.Sprintf("0.%d.0", num)
+	tagName := fmt.Sprintf("%s%s", tagPrefix, version)
 	pubDate := time.Now().UTC().Format(time.RFC3339)
 
 	if out := os.Getenv("GITHUB_OUTPUT"); out != "" {
@@ -101,7 +104,6 @@ func cmdBump() error {
 		fmt.Printf("pub_date=%s\n", pubDate)
 	}
 
-	// Configure git as GitHub Actions bot
 	if err := gitConfig("user.name", "github-actions[bot]"); err != nil {
 		return err
 	}
@@ -109,7 +111,6 @@ func cmdBump() error {
 		return err
 	}
 
-	tagName := tagPrefix + version
 	if err := gitTagExists(tagName); err == nil {
 		fmt.Printf("Tag %s already exists; skipping push\n", tagName)
 		return nil

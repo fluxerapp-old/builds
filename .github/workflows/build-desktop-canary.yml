@@ -98,9 +98,7 @@ jobs:
           version: 10.22.0
 
       - name: Inject computed version into Tauri config
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: go run ./scripts/ci/desktopci set-tauri --config fluxer_app/src-tauri/tauri.conf.canary.json --version "$VERSION"
+        run: go run ./scripts/ci/desktopci set-tauri --config fluxer_app/src-tauri/tauri.conf.canary.json --version "${{ needs.version.outputs.version }}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

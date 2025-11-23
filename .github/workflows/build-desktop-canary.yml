@@ -101,7 +101,7 @@ jobs:
         working-directory: fluxer_app
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: go run ./scripts/ci/desktopci set-tauri --config src-tauri/tauri.conf.canary.json --version "$VERSION"
+        run: go run ../scripts/ci/desktopci set-tauri --config src-tauri/tauri.conf.canary.json --version "$VERSION"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

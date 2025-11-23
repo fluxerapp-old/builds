@@ -3,6 +3,9 @@ name: Build Desktop App (Canary)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: build-desktop-canary
   cancel-in-progress: true
@@ -11,8 +14,30 @@ env:
   CHANNEL: canary
 
 jobs:
+  version:
+    name: Bump Canary Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      pub_date: ${{ steps.bump.outputs.pub_date }}
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Checkout repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Calculate and push next tag
+        id: bump
+        run: go run ./scripts/ci/desktopci bump
+
   build:
     name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -66,6 +91,12 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10.22.0
+
+      - name: Inject computed version into Tauri config
+        working-directory: fluxer_app
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: go run ./scripts/ci/desktopci set-tauri --config src-tauri/tauri.conf.canary.json --version "$VERSION"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -128,7 +159,7 @@ jobs:
 
   upload:
     name: Upload builds to S3
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     env:
       AWS_S3_ENDPOINT: https://s3.us-east-va.io.cloud.ovh.us
@@ -154,128 +185,4 @@ jobs:
           path: artifacts
 
       - name: Upload all builds to S3
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          CHANNEL="${CHANNEL}"
-
-          VERSION=$(python -c "import json; print(json.load(open('fluxer_app/src-tauri/tauri.conf.canary.json'))['version'])")
-          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-          find_one() {
-            local dir="$1"
-            local pattern="$2"
-            local file
-            file=$(find "${dir}" -maxdepth 1 -type f -name "${pattern}" | head -n 1)
-            if [[ -z "${file}" ]]; then
-              echo "Missing artifact matching ${dir}/${pattern}" >&2
-              exit 1
-            fi
-            echo "${file}"
-          }
-
-          WIN_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-x64/nsis"
-          WIN_X64_SETUP=$(find_one "${WIN_X64_DIR}" "*_x64-setup.exe")
-          WIN_X64_SIG_FILE="${WIN_X64_SETUP}.sig"
-          [[ -f "${WIN_X64_SIG_FILE}" ]] || { echo "Missing signature ${WIN_X64_SIG_FILE}" >&2; exit 1; }
-          WIN_X64_SIG=$(tr -d '\n' < "${WIN_X64_SIG_FILE}")
-
-          WIN_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-windows-arm64/nsis"
-          WIN_ARM64_SETUP=$(find_one "${WIN_ARM64_DIR}" "*_arm64-setup.exe")
-          WIN_ARM64_SIG_FILE="${WIN_ARM64_SETUP}.sig"
-          [[ -f "${WIN_ARM64_SIG_FILE}" ]] || { echo "Missing signature ${WIN_ARM64_SIG_FILE}" >&2; exit 1; }
-          WIN_ARM64_SIG=$(tr -d '\n' < "${WIN_ARM64_SIG_FILE}")
-
-          MAC_DMG_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/dmg"
-          MAC_DMG=$(find_one "${MAC_DMG_DIR}" "*_universal.dmg")
-
-          MAC_DIR="artifacts/fluxer-desktop-${CHANNEL}-macos-universal/macos"
-          MAC_TARGZ=$(find_one "${MAC_DIR}" "*.app.tar.gz")
-          MAC_SIG_FILE="${MAC_TARGZ}.sig"
-          [[ -f "${MAC_SIG_FILE}" ]] || { echo "Missing signature ${MAC_SIG_FILE}" >&2; exit 1; }
-          MAC_SIG=$(tr -d '\n' < "${MAC_SIG_FILE}")
-
-          LINUX_X64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-x64/appimage"
-          LINUX_X64_APPIMAGE=$(find_one "${LINUX_X64_DIR}" "*.AppImage")
-          LINUX_X64_SIG_FILE="${LINUX_X64_APPIMAGE}.sig"
-          [[ -f "${LINUX_X64_SIG_FILE}" ]] || { echo "Missing signature ${LINUX_X64_SIG_FILE}" >&2; exit 1; }
-          LINUX_X64_SIG=$(tr -d '\n' < "${LINUX_X64_SIG_FILE}")
-
-          LINUX_ARM64_DIR="artifacts/fluxer-desktop-${CHANNEL}-linux-arm64/appimage"
-          LINUX_ARM64_APPIMAGE=$(find_one "${LINUX_ARM64_DIR}" "*.AppImage")
-          LINUX_ARM64_SIG_FILE="${LINUX_ARM64_APPIMAGE}.sig"
-          [[ -f "${LINUX_ARM64_SIG_FILE}" ]] || { echo "Missing signature ${LINUX_ARM64_SIG_FILE}" >&2; exit 1; }
-          LINUX_ARM64_SIG=$(tr -d '\n' < "${LINUX_ARM64_SIG_FILE}")
-
-          aws s3 cp "${WIN_X64_SETUP}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/windows/x64/fluxer.exe \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/vnd.microsoft.portable-executable
-
-          aws s3 cp "${WIN_ARM64_SETUP}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/windows/arm64/fluxer.exe \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/vnd.microsoft.portable-executable
-
-          aws s3 cp "${MAC_DMG}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/macos/universal/fluxer.dmg \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/x-apple-diskimage
-
-          aws s3 cp "${MAC_TARGZ}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/macos/universal/fluxer.app.tar.gz \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/gzip
-
-          aws s3 cp "${LINUX_X64_APPIMAGE}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/linux/x64/fluxer.AppImage \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/x-executable
-
-          aws s3 cp "${LINUX_ARM64_APPIMAGE}" \
-            s3://${AWS_S3_BUCKET}/${CHANNEL}/linux/arm64/fluxer.AppImage \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/x-executable
-
-          LATEST_JSON_PATH="latest.json"
-
-          cat > "${LATEST_JSON_PATH}" <<EOF
-          {
-            "version": "${VERSION}",
-            "notes": "",
-            "pub_date": "${PUB_DATE}",
-            "platforms": {
-              "windows-x86_64": {
-                "url": "https://api.fluxer.app/dl/windows/x64/setup?channel=${CHANNEL}",
-                "signature": "${WIN_X64_SIG}"
-              },
-              "windows-aarch64": {
-                "url": "https://api.fluxer.app/dl/windows/arm64/setup?channel=${CHANNEL}",
-                "signature": "${WIN_ARM64_SIG}"
-              },
-              "darwin-x86_64": {
-                "url": "https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=${CHANNEL}",
-                "signature": "${MAC_SIG}"
-              },
-              "darwin-aarch64": {
-                "url": "https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=${CHANNEL}",
-                "signature": "${MAC_SIG}"
-              },
-              "linux-x86_64": {
-                "url": "https://api.fluxer.app/dl/linux/x64/appimage?channel=${CHANNEL}",
-                "signature": "${LINUX_X64_SIG}"
-              },
-              "linux-aarch64": {
-                "url": "https://api.fluxer.app/dl/linux/arm64/appimage?channel=${CHANNEL}",
-                "signature": "${LINUX_ARM64_SIG}"
-              }
-            }
-          }
-          EOF
-
-          aws s3 cp "${LATEST_JSON_PATH}" \
-            s3://${AWS_S3_BUCKET}/desktop/${CHANNEL}/latest.json \
-            --endpoint-url ${AWS_S3_ENDPOINT} \
-            --content-type application/json
+        run: go run ./scripts/ci/desktopci upload --channel "${CHANNEL}" --artifacts artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

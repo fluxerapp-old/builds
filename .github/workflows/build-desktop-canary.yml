@@ -81,6 +81,11 @@ jobs:
           repository: fluxerapp-old/fluxer
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
       - name: Install Linux dependencies
         if: matrix.platform == 'linux'
         run: |
@@ -183,6 +188,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
 
       - name: Upload all builds to S3
         run: go run ./scripts/ci/desktopci upload --channel "${CHANNEL}" --artifacts artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

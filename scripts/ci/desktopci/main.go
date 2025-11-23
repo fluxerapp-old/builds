@@ -68,9 +68,9 @@ func usage() {
   desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
-// bump: increments v0.x.0 tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
+// bump: increments v0.0.x tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
 func cmdBump() error {
-	tagGlob := envOr("TAG_GLOB", "v0.*")
+	tagGlob := envOr("TAG_GLOB", "v0.0.*")
 	tagPrefix := envOr("TAG_PREFIX", "v")
 
 	if err := gitFetchTags(); err != nil {
@@ -82,12 +82,12 @@ func cmdBump() error {
 	if latest != "" {
 		trimmed := strings.TrimPrefix(latest, tagPrefix)
 		parts := strings.Split(trimmed, ".")
-		if len(parts) >= 2 {
-			fmt.Sscanf(parts[1], "%d", &num)
+		if len(parts) >= 3 {
+			fmt.Sscanf(parts[2], "%d", &num)
 		}
 	}
 	num++
-	version := fmt.Sprintf("0.%d.0", num)
+	version := fmt.Sprintf("0.0.%d", num)
 	tagName := fmt.Sprintf("%s%s", tagPrefix, version)
 	pubDate := time.Now().UTC().Format(time.RFC3339)
 

@@ -98,10 +98,9 @@ jobs:
           version: 10.22.0
 
       - name: Inject computed version into Tauri config
-        working-directory: fluxer_app
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: go run ../scripts/ci/desktopci set-tauri --config src-tauri/tauri.conf.json --version "$VERSION"
+        run: go run ./scripts/ci/desktopci set-tauri --config fluxer_app/src-tauri/tauri.conf.json --version "$VERSION"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

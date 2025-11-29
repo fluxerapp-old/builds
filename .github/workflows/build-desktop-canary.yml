@@ -94,7 +94,7 @@ jobs:
 
       - name: Install Python setuptools (for node-gyp)
         if: matrix.platform == 'macos'
-        run: pip install setuptools
+        run: brew install python-setuptools
 
       - name: Update version in package.json
         working-directory: fluxer_app

@@ -96,6 +96,10 @@ jobs:
         if: matrix.platform == 'macos'
         run: brew install python-setuptools
 
+      - name: Install X11 dev libraries (for uiohook-napi)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev
+
       - name: Update version in package.json
         working-directory: fluxer_app
         run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version

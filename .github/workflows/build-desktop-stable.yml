@@ -46,28 +46,23 @@ jobs:
           - platform: windows
             arch: x64
             os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bundle: msi,nsis
+            electron_arch: x64
           - platform: windows
             arch: arm64
             os: windows-latest
-            target: aarch64-pc-windows-msvc
-            bundle: msi,nsis
+            electron_arch: arm64
           - platform: macos
             arch: universal
-            os: macos-latest
-            target: universal-apple-darwin
-            bundle: app,dmg
+            os: macos-26
+            electron_arch: universal
           - platform: linux
             arch: x64
             os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            bundle: appimage
+            electron_arch: x64
           - platform: linux
             arch: arm64
             os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            bundle: appimage
+            electron_arch: arm64
 
     steps:
       - name: Setup SSH key for private repo
@@ -81,24 +76,10 @@ jobs:
           repository: fluxerapp-old/fluxer
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.22.0
-
-      - name: Inject computed version into Tauri config
-        run: go run ./scripts/ci/desktopci set-tauri --config fluxer_app/src-tauri/tauri.conf.json --version "${{ needs.version.outputs.version }}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -111,52 +92,68 @@ jobs:
         working-directory: fluxer_app
         run: pnpm install --frozen-lockfile
 
-      - name: Prepare wrapper
+      - name: Update version in package.json
+        working-directory: fluxer_app
+        run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build web app
         working-directory: fluxer_app
         env:
           BUILD_CHANNEL: stable
-        run: pnpm prepare:wrapper
+        run: pnpm build
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+      - name: Build Electron main process
+        working-directory: fluxer_app
+        run: pnpm electron:compile
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: fluxer_app/src-tauri -> target
-          prefix-key: ${{ matrix.target }}
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+      - name: Build Electron app (macOS)
+        if: matrix.platform == 'macos'
+        working-directory: fluxer_app
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUILD_CHANNEL: stable
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          projectPath: fluxer_app
-          tauriScript: pnpm tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+        run: pnpm exec electron-builder --config electron-builder.yml --mac --${{ matrix.electron_arch }}
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'windows'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+        run: pnpm exec electron-builder --config electron-builder.yml --win --${{ matrix.electron_arch }}
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+        run: pnpm exec electron-builder --config electron-builder.yml --linux --${{ matrix.electron_arch }}
 
       - name: Prepare artifacts
         shell: bash
         run: |
           mkdir -p upload_staging
-          cp -r fluxer_app/src-tauri/target/${{ matrix.target }}/release/bundle/* upload_staging/
+          # Copy Electron build artifacts
+          if [ -d "fluxer_app/dist-electron" ]; then
+            cp -r fluxer_app/dist-electron/* upload_staging/ || true
+          fi
+          # List what we have
+          ls -la upload_staging/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: upload_staging/
+          path: |
+            upload_staging/*.exe
+            upload_staging/*.dmg
+            upload_staging/*.zip
+            upload_staging/*.AppImage
+            upload_staging/*.yml
+            upload_staging/*.blockmap
           retention-days: 30
 
   upload:
@@ -192,4 +189,4 @@ jobs:
           go-version: 'stable'
 
       - name: Upload all builds to S3
-        run: go run ./scripts/ci/desktopci upload --channel "${CHANNEL}" --artifacts artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+        run: go run ./scripts/ci/desktopci upload-electron --channel "${CHANNEL}" --artifacts artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

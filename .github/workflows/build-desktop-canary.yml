@@ -92,6 +92,10 @@ jobs:
         working-directory: fluxer_app
         run: pnpm install --frozen-lockfile
 
+      - name: Install Python setuptools (for node-gyp)
+        if: matrix.platform == 'macos'
+        run: pip install setuptools
+
       - name: Update version in package.json
         working-directory: fluxer_app
         run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version

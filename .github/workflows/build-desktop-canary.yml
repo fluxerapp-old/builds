@@ -96,12 +96,6 @@ jobs:
         working-directory: fluxer_app
         run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
-      - name: Build web app
-        working-directory: fluxer_app
-        env:
-          BUILD_CHANNEL: canary
-        run: pnpm build
-
       - name: Build Electron main process
         working-directory: fluxer_app
         run: pnpm electron:compile

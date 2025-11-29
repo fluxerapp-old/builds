@@ -98,7 +98,7 @@ jobs:
 
       - name: Install X11 dev libraries (for uiohook-napi)
         if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev
 
       - name: Update version in package.json
         working-directory: fluxer_app

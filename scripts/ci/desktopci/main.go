@@ -20,16 +20,20 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/sha512"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -45,8 +49,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case "set-tauri":
-		if err := cmdSetTauri(os.Args[2:]); err != nil {
+	case "bump-web":
+		if err := cmdBumpWeb(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -64,7 +68,7 @@ func main() {
 func usage() {
 	fmt.Println(`Usage:
   desktopci bump
-  desktopci set-tauri --config <path> --version <ver>
+  desktopci bump-web
   desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
@@ -83,7 +87,11 @@ func cmdBump() error {
 		trimmed := strings.TrimPrefix(latest, tagPrefix)
 		parts := strings.Split(trimmed, ".")
 		if len(parts) >= 3 {
-			fmt.Sscanf(parts[2], "%d", &num)
+			parsed, err := strconv.Atoi(parts[2])
+			if err != nil {
+				return fmt.Errorf("parse latest tag %q: %w", latest, err)
+			}
+			num = parsed
 		}
 	}
 	num++
@@ -121,33 +129,61 @@ func cmdBump() error {
 	return gitPushTag(tagName)
 }
 
-func cmdSetTauri(args []string) error {
-	fs := flag.NewFlagSet("set-tauri", flag.ContinueOnError)
-	configPath := fs.String("config", "", "path to tauri config json")
-	version := fs.String("version", "", "version to set")
-	if err := fs.Parse(args); err != nil {
+// bump-web: increments web-build-X tags, writes build_number to GITHUB_OUTPUT, and tags/pushes.
+// Uses a global incrementing integer starting at 1000 (first build is 1001).
+// Shared between canary and stable web deployments.
+func cmdBumpWeb() error {
+	const tagPrefix = "web-build-"
+	const tagGlob = "web-build-*"
+	const defaultStart = 1000
+
+	if err := gitFetchTags(); err != nil {
 		return err
 	}
-	if *configPath == "" || *version == "" {
-		return errors.New("config and version are required")
+
+	latest, _ := latestTag(tagGlob)
+	num := defaultStart
+	if latest != "" {
+		trimmed := strings.TrimPrefix(latest, tagPrefix)
+		parsed, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return fmt.Errorf("parse latest web tag %q: %w", latest, err)
+		}
+		num = parsed
 	}
-	data, err := os.ReadFile(*configPath)
-	if err != nil {
+	num++
+	tagName := fmt.Sprintf("%s%d", tagPrefix, num)
+
+	if out := os.Getenv("GITHUB_OUTPUT"); out != "" {
+		f, err := os.OpenFile(out, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		fmt.Fprintf(f, "build_number=%d\n", num)
+	} else {
+		fmt.Printf("build_number=%d\n", num)
+	}
+
+	if err := gitConfig("user.name", "github-actions[bot]"); err != nil {
 		return err
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(data, &obj); err != nil {
+	if err := gitConfig("user.email", "41898282+github-actions[bot]@users.noreply.github.com"); err != nil {
 		return err
 	}
-	obj["version"] = *version
-	out, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
+
+	if err := gitTagExists(tagName); err == nil {
+		fmt.Printf("Tag %s already exists; skipping push\n", tagName)
+		return nil
+	}
+	if err := gitTag(tagName); err != nil {
 		return err
 	}
-	out = append(out, '\n')
-	return os.WriteFile(*configPath, out, 0o644)
+	return gitPushTag(tagName)
 }
 
+// cmdUpload uploads Electron build artifacts to S3.
+// Electron-builder generates latest.yml files that electron-updater uses.
 func cmdUpload(args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
 	channel := fs.String("channel", "", "channel (stable/canary)")
@@ -163,71 +199,6 @@ func cmdUpload(args []string) error {
 		return errors.New("channel, endpoint, bucket, version, pub-date are required")
 	}
 
-	type findSpec struct {
-		dir     string
-		pattern string
-	}
-	findOne := func(spec findSpec) (string, error) {
-		matches, err := filepath.Glob(filepath.Join(spec.dir, spec.pattern))
-		if err != nil {
-			return "", err
-		}
-		if len(matches) == 0 {
-			return "", fmt.Errorf("missing artifact matching %s", filepath.Join(spec.dir, spec.pattern))
-		}
-		return matches[0], nil
-	}
-
-	winX64Setup, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-x64/nsis", *channel)), "*_x64-setup.exe"})
-	if err != nil {
-		return err
-	}
-	winX64Sig, err := readSig(winX64Setup + ".sig")
-	if err != nil {
-		return err
-	}
-
-	winArmSetup, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-arm64/nsis", *channel)), "*_arm64-setup.exe"})
-	if err != nil {
-		return err
-	}
-	winArmSig, err := readSig(winArmSetup + ".sig")
-	if err != nil {
-		return err
-	}
-
-	macDmg, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-macos-universal/dmg", *channel)), "*_universal.dmg"})
-	if err != nil {
-		return err
-	}
-
-	macTarGz, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-macos-universal/macos", *channel)), "*.app.tar.gz"})
-	if err != nil {
-		return err
-	}
-	macSig, err := readSig(macTarGz + ".sig")
-	if err != nil {
-		return err
-	}
-
-	linX64, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-x64/appimage", *channel)), "*.AppImage"})
-	if err != nil {
-		return err
-	}
-	linX64Sig, err := readSig(linX64 + ".sig")
-	if err != nil {
-		return err
-	}
-
-	linArm, err := findOne(findSpec{filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-arm64/appimage", *channel)), "*.AppImage"})
-	if err != nil {
-		return err
-	}
-	linArmSig, err := readSig(linArm + ".sig")
-	if err != nil {
-		return err
-	}
-
 	uploader := func(src, key, contentType string) error {
 		args := []string{"s3", "cp", src, fmt.Sprintf("s3://%s/%s", *bucket, key), "--endpoint-url", *endpoint}
 		if contentType != "" {
@@ -239,68 +210,210 @@ func cmdUpload(args []string) error {
 		return cmd.Run()
 	}
 
-	if err := uploader(winX64Setup, fmt.Sprintf("%s/windows/x64/fluxer.exe", *channel), "application/vnd.microsoft.portable-executable"); err != nil {
-		return err
+	findFirst := func(patterns ...string) (string, error) {
+		for _, pattern := range patterns {
+			matches, err := filepath.Glob(pattern)
+			if err != nil {
+				continue
+			}
+			if len(matches) > 0 {
+				return matches[0], nil
+			}
+		}
+		return "", fmt.Errorf("no file found matching patterns: %v", patterns)
 	}
-	if err := uploader(winArmSetup, fmt.Sprintf("%s/windows/arm64/fluxer.exe", *channel), "application/vnd.microsoft.portable-executable"); err != nil {
-		return err
+
+	// Windows x64
+	winX64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-x64", *channel))
+	winX64Exe, err := findFirst(
+		filepath.Join(winX64Dir, "*.exe"),
+		filepath.Join(winX64Dir, "**", "*.exe"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: Windows x64 exe not found: %v\n", err)
+	} else {
+		if err := uploader(winX64Exe, fmt.Sprintf("%s/windows/x64/%s", *channel, filepath.Base(winX64Exe)), "application/vnd.microsoft.portable-executable"); err != nil {
+			return fmt.Errorf("upload windows x64 exe: %w", err)
+		}
 	}
-	if err := uploader(macDmg, fmt.Sprintf("%s/macos/universal/fluxer.dmg", *channel), "application/x-apple-diskimage"); err != nil {
-		return err
+
+	// Windows arm64
+	winArm64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-arm64", *channel))
+	winArm64Exe, err := findFirst(
+		filepath.Join(winArm64Dir, "*.exe"),
+		filepath.Join(winArm64Dir, "**", "*.exe"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: Windows arm64 exe not found: %v\n", err)
+	} else {
+		if err := uploader(winArm64Exe, fmt.Sprintf("%s/windows/arm64/%s", *channel, filepath.Base(winArm64Exe)), "application/vnd.microsoft.portable-executable"); err != nil {
+			return fmt.Errorf("upload windows arm64 exe: %w", err)
+		}
 	}
-	if err := uploader(macTarGz, fmt.Sprintf("%s/macos/universal/fluxer.app.tar.gz", *channel), "application/gzip"); err != nil {
-		return err
+
+	// macOS universal
+	macDir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-macos-universal", *channel))
+	macDmg, err := findFirst(
+		filepath.Join(macDir, "*.dmg"),
+		filepath.Join(macDir, "**", "*.dmg"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: macOS dmg not found: %v\n", err)
+	} else {
+		if err := uploader(macDmg, fmt.Sprintf("%s/macos/universal/%s", *channel, filepath.Base(macDmg)), "application/x-apple-diskimage"); err != nil {
+			return fmt.Errorf("upload macos dmg: %w", err)
+		}
 	}
-	if err := uploader(linX64, fmt.Sprintf("%s/linux/x64/fluxer.AppImage", *channel), "application/x-executable"); err != nil {
-		return err
+
+	macZip, err := findFirst(
+		filepath.Join(macDir, "*.zip"),
+		filepath.Join(macDir, "**", "*.zip"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: macOS zip not found: %v\n", err)
+	} else {
+		if err := uploader(macZip, fmt.Sprintf("%s/macos/universal/%s", *channel, filepath.Base(macZip)), "application/zip"); err != nil {
+			return fmt.Errorf("upload macos zip: %w", err)
+		}
 	}
-	if err := uploader(linArm, fmt.Sprintf("%s/linux/arm64/fluxer.AppImage", *channel), "application/x-executable"); err != nil {
-		return err
+
+	// Linux x64
+	linuxX64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-x64", *channel))
+	linuxX64AppImage, err := findFirst(
+		filepath.Join(linuxX64Dir, "*.AppImage"),
+		filepath.Join(linuxX64Dir, "**", "*.AppImage"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: Linux x64 AppImage not found: %v\n", err)
+	} else {
+		if err := uploader(linuxX64AppImage, fmt.Sprintf("%s/linux/x64/%s", *channel, filepath.Base(linuxX64AppImage)), "application/x-executable"); err != nil {
+			return fmt.Errorf("upload linux x64 appimage: %w", err)
+		}
 	}
+
+	// Linux arm64
+	linuxArm64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-arm64", *channel))
+	linuxArm64AppImage, err := findFirst(
+		filepath.Join(linuxArm64Dir, "*.AppImage"),
+		filepath.Join(linuxArm64Dir, "**", "*.AppImage"),
+	)
+	if err != nil {
+		fmt.Printf("Warning: Linux arm64 AppImage not found: %v\n", err)
+	} else {
+		if err := uploader(linuxArm64AppImage, fmt.Sprintf("%s/linux/arm64/%s", *channel, filepath.Base(linuxArm64AppImage)), "application/x-executable"); err != nil {
+			return fmt.Errorf("upload linux arm64 appimage: %w", err)
+		}
+	}
+
+	// Generate and upload latest.yml files for each platform
+	// electron-updater expects platform-specific latest.yml files
+
+	// latest-mac.yml
+	if macZip != "" {
+		macYml, err := generateLatestYml(macZip, *version, *pubDate, *channel, "macos", "universal")
+		if err != nil {
+			return fmt.Errorf("generate latest-mac.yml: %w", err)
+		}
+		tmp := filepath.Join(os.TempDir(), "latest-mac.yml")
+		if err := os.WriteFile(tmp, macYml, 0o644); err != nil {
+			return err
+		}
+		if err := uploader(tmp, fmt.Sprintf("desktop/%s/latest-mac.yml", *channel), "text/yaml"); err != nil {
+			return fmt.Errorf("upload latest-mac.yml: %w", err)
+		}
+	}
+
+	// latest.yml (Windows - electron-updater default for Windows)
+	if winX64Exe != "" {
+		winYml, err := generateLatestYml(winX64Exe, *version, *pubDate, *channel, "windows", "x64")
+		if err != nil {
+			return fmt.Errorf("generate latest.yml (windows): %w", err)
+		}
+		tmp := filepath.Join(os.TempDir(), "latest.yml")
+		if err := os.WriteFile(tmp, winYml, 0o644); err != nil {
+			return err
+		}
+		if err := uploader(tmp, fmt.Sprintf("desktop/%s/latest.yml", *channel), "text/yaml"); err != nil {
+			return fmt.Errorf("upload latest.yml: %w", err)
+		}
+	}
+
+	// latest-linux.yml
+	if linuxX64AppImage != "" {
+		linuxYml, err := generateLatestYml(linuxX64AppImage, *version, *pubDate, *channel, "linux", "x64")
+		if err != nil {
+			return fmt.Errorf("generate latest-linux.yml: %w", err)
+		}
+		tmp := filepath.Join(os.TempDir(), "latest-linux.yml")
+		if err := os.WriteFile(tmp, linuxYml, 0o644); err != nil {
+			return err
+		}
+		if err := uploader(tmp, fmt.Sprintf("desktop/%s/latest-linux.yml", *channel), "text/yaml"); err != nil {
+			return fmt.Errorf("upload latest-linux.yml: %w", err)
+		}
+	}
+
+	fmt.Println("Electron artifacts uploaded successfully!")
+	return nil
+}
+
+// generateLatestYml creates a latest.yml file for electron-updater
+func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch string) ([]byte, error) {
+	// Compute SHA512 hash
+	f, err := os.Open(artifactPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	hash := sha512.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return nil, err
+	}
+	sha512Hash := base64.StdEncoding.EncodeToString(hash.Sum(nil))
+
+	// Get file info
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		return nil, err
+	}
+
+	filename := filepath.Base(artifactPath)
+	downloadURL := fmt.Sprintf("https://api.fluxer.app/dl/%s/%s/%s?channel=%s", platform, arch, getArtifactType(filename), channel)
 
 	latest := map[string]any{
-		"version":  *version,
-		"notes":    "",
-		"pub_date": *pubDate,
-		"platforms": map[string]any{
-			"windows-x86_64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/windows/x64/setup?channel=%s", *channel),
-				"signature": winX64Sig,
-			},
-			"windows-aarch64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/windows/arm64/setup?channel=%s", *channel),
-				"signature": winArmSig,
-			},
-			"darwin-x86_64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=%s", *channel),
-				"signature": macSig,
-			},
-			"darwin-aarch64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/macos/universal/app_tar_gz?channel=%s", *channel),
-				"signature": macSig,
-			},
-			"linux-x86_64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/linux/x64/appimage?channel=%s", *channel),
-				"signature": linX64Sig,
-			},
-			"linux-aarch64": map[string]string{
-				"url":       fmt.Sprintf("https://api.fluxer.app/dl/linux/arm64/appimage?channel=%s", *channel),
-				"signature": linArmSig,
+		"version":     version,
+		"releaseDate": pubDate,
+		"files": []map[string]any{
+			{
+				"url":    downloadURL,
+				"sha512": sha512Hash,
+				"size":   info.Size(),
 			},
 		},
+		"path":         downloadURL,
+		"sha512":       sha512Hash,
+		"releaseNotes": "",
 	}
 
-	buf, err := json.MarshalIndent(latest, "", "  ")
-	if err != nil {
-		return err
-	}
-	buf = append(buf, '\n')
-	tmp := filepath.Join(os.TempDir(), "latest.json")
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
-		return err
-	}
+	return yaml.Marshal(latest)
+}
 
-	return uploader(tmp, fmt.Sprintf("desktop/%s/latest.json", *channel), "application/json")
+// getArtifactType returns a URL-friendly artifact type from filename
+func getArtifactType(filename string) string {
+	lower := strings.ToLower(filename)
+	switch {
+	case strings.HasSuffix(lower, ".exe"):
+		return "setup"
+	case strings.HasSuffix(lower, ".dmg"):
+		return "dmg"
+	case strings.HasSuffix(lower, ".zip"):
+		return "zip"
+	case strings.HasSuffix(lower, ".appimage"):
+		return "appimage"
+	default:
+		return "file"
+	}
 }
 
 func envOr(k, def string) string {
@@ -344,12 +457,4 @@ func gitPushTag(tag string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-func readSig(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(bytes.ReplaceAll(data, []byte("\n"), nil))), nil
 }

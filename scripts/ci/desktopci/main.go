@@ -54,7 +54,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case "upload", "upload-electron":
+	case "upload":
 		if err := cmdUpload(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -69,7 +69,7 @@ func usage() {
 	fmt.Println(`Usage:
   desktopci bump
   desktopci bump-web
-  desktopci upload|upload-electron --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
+  desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
 // bump: increments v0.0.x tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
@@ -223,93 +223,131 @@ func cmdUpload(args []string) error {
 		return "", fmt.Errorf("no file found matching patterns: %v", patterns)
 	}
 
-	// Windows x64
+	type artifact struct {
+		id          string
+		label       string
+		dir         string
+		patterns    []string
+		key         string
+		contentType string
+	}
+
+	uploadArtifacts := func(items []artifact) (map[string]string, error) {
+		found := make(map[string]string)
+
+		for _, a := range items {
+			fullPatterns := make([]string, len(a.patterns))
+			for i, p := range a.patterns {
+				fullPatterns[i] = filepath.Join(a.dir, p)
+			}
+
+			path, err := findFirst(fullPatterns...)
+			if err != nil {
+				fmt.Printf("Warning: %s not found: %v\n", a.label, err)
+				continue
+			}
+
+			if err := uploader(path, a.key, a.contentType); err != nil {
+				return found, fmt.Errorf("upload %s: %w", a.label, err)
+			}
+
+			if a.id != "" {
+				found[a.id] = path
+			}
+		}
+		return found, nil
+	}
+
 	winX64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-x64", *channel))
-	winX64Exe, err := findFirst(
-		filepath.Join(winX64Dir, "*.exe"),
-		filepath.Join(winX64Dir, "**", "*.exe"),
-	)
-	if err != nil {
-		fmt.Printf("Warning: Windows x64 exe not found: %v\n", err)
-	} else {
-		if err := uploader(winX64Exe, fmt.Sprintf("%s/windows/x64/%s", *channel, filepath.Base(winX64Exe)), "application/vnd.microsoft.portable-executable"); err != nil {
-			return fmt.Errorf("upload windows x64 exe: %w", err)
-		}
-	}
-
-	// Windows arm64
 	winArm64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-windows-arm64", *channel))
-	winArm64Exe, err := findFirst(
-		filepath.Join(winArm64Dir, "*.exe"),
-		filepath.Join(winArm64Dir, "**", "*.exe"),
-	)
-	if err != nil {
-		fmt.Printf("Warning: Windows arm64 exe not found: %v\n", err)
-	} else {
-		if err := uploader(winArm64Exe, fmt.Sprintf("%s/windows/arm64/%s", *channel, filepath.Base(winArm64Exe)), "application/vnd.microsoft.portable-executable"); err != nil {
-			return fmt.Errorf("upload windows arm64 exe: %w", err)
-		}
-	}
-
-	// macOS universal
 	macDir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-macos-universal", *channel))
-	macDmg, err := findFirst(
-		filepath.Join(macDir, "*.dmg"),
-		filepath.Join(macDir, "**", "*.dmg"),
-	)
-	if err != nil {
-		fmt.Printf("Warning: macOS dmg not found: %v\n", err)
-	} else {
-		if err := uploader(macDmg, fmt.Sprintf("%s/macos/universal/%s", *channel, filepath.Base(macDmg)), "application/x-apple-diskimage"); err != nil {
-			return fmt.Errorf("upload macos dmg: %w", err)
-		}
-	}
-
-	macZip, err := findFirst(
-		filepath.Join(macDir, "*.zip"),
-		filepath.Join(macDir, "**", "*.zip"),
-	)
-	if err != nil {
-		fmt.Printf("Warning: macOS zip not found: %v\n", err)
-	} else {
-		if err := uploader(macZip, fmt.Sprintf("%s/macos/universal/%s", *channel, filepath.Base(macZip)), "application/zip"); err != nil {
-			return fmt.Errorf("upload macos zip: %w", err)
-		}
-	}
-
-	// Linux x64
 	linuxX64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-x64", *channel))
-	linuxX64AppImage, err := findFirst(
-		filepath.Join(linuxX64Dir, "*.AppImage"),
-		filepath.Join(linuxX64Dir, "**", "*.AppImage"),
-	)
-	if err != nil {
-		fmt.Printf("Warning: Linux x64 AppImage not found: %v\n", err)
-	} else {
-		if err := uploader(linuxX64AppImage, fmt.Sprintf("%s/linux/x64/%s", *channel, filepath.Base(linuxX64AppImage)), "application/x-executable"); err != nil {
-			return fmt.Errorf("upload linux x64 appimage: %w", err)
-		}
-	}
-
-	// Linux arm64
 	linuxArm64Dir := filepath.Join(*artifactsDir, fmt.Sprintf("fluxer-desktop-%s-linux-arm64", *channel))
-	linuxArm64AppImage, err := findFirst(
-		filepath.Join(linuxArm64Dir, "*.AppImage"),
-		filepath.Join(linuxArm64Dir, "**", "*.AppImage"),
-	)
+
+	found, err := uploadArtifacts([]artifact{
+		{
+			id:          "win-x64-exe",
+			label:       "Windows x64 exe",
+			dir:         winX64Dir,
+			patterns:    []string{"*-x64-setup.exe", "*-setup.exe", "*.exe", "**/*.exe"},
+			key:         fmt.Sprintf("%s/windows/x64/fluxer.exe", *channel),
+			contentType: "application/vnd.microsoft.portable-executable",
+		},
+		{
+			label:       "Windows arm64 exe",
+			dir:         winArm64Dir,
+			patterns:    []string{"*-arm64-setup.exe", "*-setup.exe", "*.exe", "**/*.exe"},
+			key:         fmt.Sprintf("%s/windows/arm64/fluxer.exe", *channel),
+			contentType: "application/vnd.microsoft.portable-executable",
+		},
+		{
+			label:       "macOS dmg",
+			dir:         macDir,
+			patterns:    []string{"*.dmg", "**/*.dmg"},
+			key:         fmt.Sprintf("%s/macos/universal/fluxer.dmg", *channel),
+			contentType: "application/x-apple-diskimage",
+		},
+		{
+			id:          "mac-zip",
+			label:       "macOS zip",
+			dir:         macDir,
+			patterns:    []string{"*.zip", "**/*.zip"},
+			key:         fmt.Sprintf("%s/macos/universal/fluxer.zip", *channel),
+			contentType: "application/zip",
+		},
+		{
+			id:          "linux-x64-appimage",
+			label:       "Linux x64 AppImage",
+			dir:         linuxX64Dir,
+			patterns:    []string{"*.AppImage", "**/*.AppImage"},
+			key:         fmt.Sprintf("%s/linux/x64/fluxer.AppImage", *channel),
+			contentType: "application/x-executable",
+		},
+		{
+			label:       "Linux x64 deb",
+			dir:         linuxX64Dir,
+			patterns:    []string{"*.deb", "**/*.deb"},
+			key:         fmt.Sprintf("%s/linux/x64/fluxer.deb", *channel),
+			contentType: "application/vnd.debian.binary-package",
+		},
+		{
+			label:       "Linux x64 tar.gz",
+			dir:         linuxX64Dir,
+			patterns:    []string{"*.tar.gz", "**/*.tar.gz"},
+			key:         fmt.Sprintf("%s/linux/x64/fluxer.tar.gz", *channel),
+			contentType: "application/gzip",
+		},
+		{
+			label:       "Linux arm64 AppImage",
+			dir:         linuxArm64Dir,
+			patterns:    []string{"*.AppImage", "**/*.AppImage"},
+			key:         fmt.Sprintf("%s/linux/arm64/fluxer.AppImage", *channel),
+			contentType: "application/x-executable",
+		},
+		{
+			label:       "Linux arm64 deb",
+			dir:         linuxArm64Dir,
+			patterns:    []string{"*.deb", "**/*.deb"},
+			key:         fmt.Sprintf("%s/linux/arm64/fluxer.deb", *channel),
+			contentType: "application/vnd.debian.binary-package",
+		},
+		{
+			label:       "Linux arm64 tar.gz",
+			dir:         linuxArm64Dir,
+			patterns:    []string{"*.tar.gz", "**/*.tar.gz"},
+			key:         fmt.Sprintf("%s/linux/arm64/fluxer.tar.gz", *channel),
+			contentType: "application/gzip",
+		},
+	})
 	if err != nil {
-		fmt.Printf("Warning: Linux arm64 AppImage not found: %v\n", err)
-	} else {
-		if err := uploader(linuxArm64AppImage, fmt.Sprintf("%s/linux/arm64/%s", *channel, filepath.Base(linuxArm64AppImage)), "application/x-executable"); err != nil {
-			return fmt.Errorf("upload linux arm64 appimage: %w", err)
-		}
+		return err
 	}
 
 	// Generate and upload latest.yml files for each platform
 	// electron-updater expects platform-specific latest.yml files
 
 	// latest-mac.yml
-	if macZip != "" {
+	if macZip := found["mac-zip"]; macZip != "" {
 		macYml, err := generateLatestYml(macZip, *version, *pubDate, *channel, "macos", "universal")
 		if err != nil {
 			return fmt.Errorf("generate latest-mac.yml: %w", err)
@@ -324,7 +362,7 @@ func cmdUpload(args []string) error {
 	}
 
 	// latest.yml (Windows - electron-updater default for Windows)
-	if winX64Exe != "" {
+	if winX64Exe := found["win-x64-exe"]; winX64Exe != "" {
 		winYml, err := generateLatestYml(winX64Exe, *version, *pubDate, *channel, "windows", "x64")
 		if err != nil {
 			return fmt.Errorf("generate latest.yml (windows): %w", err)
@@ -339,7 +377,7 @@ func cmdUpload(args []string) error {
 	}
 
 	// latest-linux.yml
-	if linuxX64AppImage != "" {
+	if linuxX64AppImage := found["linux-x64-appimage"]; linuxX64AppImage != "" {
 		linuxYml, err := generateLatestYml(linuxX64AppImage, *version, *pubDate, *channel, "linux", "x64")
 		if err != nil {
 			return fmt.Errorf("generate latest-linux.yml: %w", err)
@@ -402,18 +440,25 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 // getArtifactType returns a URL-friendly artifact type from filename
 func getArtifactType(filename string) string {
 	lower := strings.ToLower(filename)
-	switch {
-	case strings.HasSuffix(lower, ".exe"):
-		return "setup"
-	case strings.HasSuffix(lower, ".dmg"):
-		return "dmg"
-	case strings.HasSuffix(lower, ".zip"):
-		return "zip"
-	case strings.HasSuffix(lower, ".appimage"):
-		return "appimage"
-	default:
-		return "file"
+	suffixes := []struct {
+		suffix string
+		name   string
+	}{
+		{".exe", "setup"},
+		{".dmg", "dmg"},
+		{".zip", "zip"},
+		{".appimage", "appimage"},
+		{".deb", "deb"},
+		{".tar.gz", "tar_gz"},
 	}
+
+	for _, s := range suffixes {
+		if strings.HasSuffix(lower, s.suffix) {
+			return s.name
+		}
+	}
+
+	return "file"
 }
 
 func envOr(k, def string) string {

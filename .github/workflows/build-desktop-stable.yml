@@ -186,6 +186,17 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten artifact directories for uploader
+        shell: bash
+        run: |
+          shopt -s nullglob dotglob
+          for dir in artifacts/fluxer-desktop-${CHANNEL}-*; do
+            [[ -d "$dir/upload_staging" ]] || continue
+            mv "$dir"/upload_staging/* "$dir"/
+            rmdir "$dir/upload_staging" || true
+          done
+          shopt -u nullglob dotglob
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -193,4 +204,4 @@ jobs:
 
       - name: Upload all builds to S3
         working-directory: scripts/ci/desktopci
-        run: go run . upload-electron --channel "${CHANNEL}" --artifacts ../artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+        run: go run . upload --channel "${CHANNEL}" --artifacts ../artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

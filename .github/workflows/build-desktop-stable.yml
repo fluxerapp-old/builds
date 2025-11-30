@@ -112,6 +112,13 @@ jobs:
         working-directory: fluxer_app
         run: pnpm electron:compile
 
+      - name: Generate macOS squircle icons
+        if: matrix.platform == 'macos'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+        run: pnpm generate:mac-icons
+
       - name: Build Electron app (macOS)
         if: matrix.platform == 'macos'
         working-directory: fluxer_app

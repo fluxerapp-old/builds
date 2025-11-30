@@ -193,4 +193,4 @@ jobs:
 
       - name: Upload all builds to S3
         working-directory: scripts/ci/desktopci
-        run: go run . upload-electron --channel "${CHANNEL}" --artifacts ../artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+        run: go run . upload --channel "${CHANNEL}" --artifacts ../artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

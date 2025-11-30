@@ -33,7 +33,8 @@ jobs:
 
       - name: Calculate and push next tag
         id: bump
-        run: go run ./scripts/ci/desktopci bump
+        working-directory: scripts/ci/desktopci
+        run: go run . bump
 
   build:
     name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
@@ -191,4 +192,5 @@ jobs:
           go-version: 'stable'
 
       - name: Upload all builds to S3
-        run: go run ./scripts/ci/desktopci upload-electron --channel "${CHANNEL}" --artifacts artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+        working-directory: scripts/ci/desktopci
+        run: go run . upload-electron --channel "${CHANNEL}" --artifacts ../artifacts --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

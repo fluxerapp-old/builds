@@ -54,7 +54,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case "upload":
+	case "upload", "upload-electron":
 		if err := cmdUpload(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -69,7 +69,7 @@ func usage() {
 	fmt.Println(`Usage:
   desktopci bump
   desktopci bump-web
-  desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
+  desktopci upload|upload-electron --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
 // bump: increments v0.0.x tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.

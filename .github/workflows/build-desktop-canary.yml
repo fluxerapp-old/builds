@@ -97,9 +97,12 @@ jobs:
         if: matrix.platform == 'macos'
         run: brew install python-setuptools
 
-      - name: Install X11 dev libraries (for uiohook-napi)
+      - name: Install Linux build dependencies (X11 + fpm)
         if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm
+          sudo gem install --no-document fpm
 
       - name: Update version in package.json
         working-directory: fluxer_app
@@ -133,6 +136,7 @@ jobs:
         working-directory: fluxer_app
         env:
           BUILD_CHANNEL: canary
+          USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.canary.yml --linux --${{ matrix.electron_arch }}
 
       - name: Prepare artifacts

@@ -155,6 +155,7 @@ jobs:
           path: |
             upload_staging/*.exe
             upload_staging/*.dmg
+            upload_staging/*.zip
             upload_staging/*.AppImage
             upload_staging/*.deb
             upload_staging/*.tar.gz

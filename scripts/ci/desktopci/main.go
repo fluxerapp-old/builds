@@ -132,34 +132,7 @@ func cmdBumpWeb() error {
 	const tagPrefix = "web-build-"
 	const tagGlob = "web-build-*"
 	const defaultStart = 1000
-
-	if err := gitFetchTags(); err != nil {
-		return err
-	}
-
-	latest, _ := latestTag(tagGlob)
-	num := defaultStart
-	if latest != "" {
-		trimmed := strings.TrimPrefix(latest, tagPrefix)
-		parsed, err := strconv.Atoi(trimmed)
-		if err != nil {
-			return fmt.Errorf("parse latest web tag %q: %w", latest, err)
-		}
-		num = parsed
-	}
-	num++
-	tagName := fmt.Sprintf("%s%d", tagPrefix, num)
-
-	if out := os.Getenv("GITHUB_OUTPUT"); out != "" {
-		f, err := os.OpenFile(out, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		fmt.Fprintf(f, "build_number=%d\n", num)
-	} else {
-		fmt.Printf("build_number=%d\n", num)
-	}
+	const maxRetries = 10
 
 	if err := gitConfig("user.name", "github-actions[bot]"); err != nil {
 		return err
@@ -168,14 +141,56 @@ func cmdBumpWeb() error {
 		return err
 	}
 
-	if err := gitTagExists(tagName); err == nil {
-		fmt.Printf("Tag %s already exists; skipping push\n", tagName)
+	// Retry loop to handle concurrent builds atomically
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := gitFetchTags(); err != nil {
+			return err
+		}
+
+		latest, _ := latestTag(tagGlob)
+		num := defaultStart
+		if latest != "" {
+			trimmed := strings.TrimPrefix(latest, tagPrefix)
+			parsed, err := strconv.Atoi(trimmed)
+			if err != nil {
+				return fmt.Errorf("parse latest web tag %q: %w", latest, err)
+			}
+			num = parsed
+		}
+		num++
+		tagName := fmt.Sprintf("%s%d", tagPrefix, num)
+
+		// Try to create the tag locally
+		if err := gitTag(tagName); err != nil {
+			// Tag already exists locally, retry with next number
+			continue
+		}
+
+		// Try to push the tag atomically
+		if err := gitPushTag(tagName); err != nil {
+			// Push failed (likely remote tag exists), delete local tag and retry
+			_ = exec.Command("git", "tag", "-d", tagName).Run()
+			fmt.Printf("Tag %s already exists on remote; retrying with next number (attempt %d/%d)\n", tagName, attempt+1, maxRetries)
+			continue
+		}
+
+		// Success! Output the build number
+		if out := os.Getenv("GITHUB_OUTPUT"); out != "" {
+			f, err := os.OpenFile(out, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			fmt.Fprintf(f, "build_number=%d\n", num)
+		} else {
+			fmt.Printf("build_number=%d\n", num)
+		}
+
+		fmt.Printf("Successfully created and pushed tag %s\n", tagName)
 		return nil
 	}
-	if err := gitTag(tagName); err != nil {
-		return err
-	}
-	return gitPushTag(tagName)
+
+	return fmt.Errorf("failed to create web build tag after %d attempts", maxRetries)
 }
 
 func cmdUpload(args []string) error {
@@ -416,6 +431,7 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 
 	filename := filepath.Base(artifactPath)
 	downloadURL := fmt.Sprintf("https://api.fluxer.app/dl/%s/%s/%s?channel=%s", platform, arch, getArtifactType(filename), channel)
+	sanitizedPath := fmt.Sprintf("fluxer-%s-%s.%s", version, arch, getArtifactExtension(filename))
 
 	latest := map[string]any{
 		"version":     version,
@@ -427,7 +443,7 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 				"size":   info.Size(),
 			},
 		},
-		"path":         downloadURL,
+		"path":         sanitizedPath,
 		"sha512":       sha512Hash,
 		"releaseNotes": "",
 	}
@@ -456,6 +472,19 @@ func getArtifactType(filename string) string {
 	}
 
 	return "file"
+}
+
+func getArtifactExtension(filename string) string {
+	lower := strings.ToLower(filename)
+	extensions := []string{".tar.gz", ".exe", ".dmg", ".zip", ".appimage", ".deb"}
+
+	for _, ext := range extensions {
+		if strings.HasSuffix(lower, ext) {
+			return strings.TrimPrefix(ext, ".")
+		}
+	}
+
+	return "bin"
 }
 
 func envOr(k, def string) string {

@@ -283,6 +283,14 @@ func cmdUpload(args []string) error {
 			contentType: "application/x-apple-diskimage",
 		},
 		{
+			id:          "mac-zip",
+			label:       "macOS zip",
+			dir:         macDir,
+			patterns:    []string{"*.zip", "**/*.zip"},
+			key:         fmt.Sprintf("%s/macos/universal/fluxer.zip", *channel),
+			contentType: "application/zip",
+		},
+		{
 			id:          "linux-x64-appimage",
 			label:       "Linux x64 AppImage",
 			dir:         linuxX64Dir,
@@ -330,8 +338,8 @@ func cmdUpload(args []string) error {
 		return err
 	}
 
-	if macDmg := found["mac-dmg"]; macDmg != "" {
-		macYml, err := generateLatestYml(macDmg, *version, *pubDate, *channel, "macos", "universal")
+	if macZip := found["mac-zip"]; macZip != "" {
+		macYml, err := generateLatestYml(macZip, *version, *pubDate, *channel, "macos", "universal")
 		if err != nil {
 			return fmt.Errorf("generate latest-mac.yml: %w", err)
 		}
@@ -341,6 +349,18 @@ func cmdUpload(args []string) error {
 		}
 		if err := uploader(tmp, fmt.Sprintf("desktop/%s/latest-mac.yml", *channel), "text/yaml"); err != nil {
 			return fmt.Errorf("upload latest-mac.yml: %w", err)
+		}
+	} else if macDmg := found["mac-dmg"]; macDmg != "" {
+		macYml, err := generateLatestYml(macDmg, *version, *pubDate, *channel, "macos", "universal")
+		if err != nil {
+			return fmt.Errorf("generate latest-mac.yml from dmg: %w", err)
+		}
+		tmp := filepath.Join(os.TempDir(), "latest-mac.yml")
+		if err := os.WriteFile(tmp, macYml, 0o644); err != nil {
+			return err
+		}
+		if err := uploader(tmp, fmt.Sprintf("desktop/%s/latest-mac.yml", *channel), "text/yaml"); err != nil {
+			return fmt.Errorf("upload latest-mac.yml from dmg: %w", err)
 		}
 	}
 

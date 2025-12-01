@@ -143,11 +143,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p upload_staging
-          # Copy Electron build artifacts
           if [ -d "fluxer_app/dist-electron" ]; then
             cp -r fluxer_app/dist-electron/* upload_staging/ || true
           fi
-          # List what we have
           ls -la upload_staging/
 
       - name: Upload artifacts
@@ -157,8 +155,9 @@ jobs:
           path: |
             upload_staging/*.exe
             upload_staging/*.dmg
-            upload_staging/*.zip
             upload_staging/*.AppImage
+            upload_staging/*.deb
+            upload_staging/*.tar.gz
             upload_staging/*.yml
             upload_staging/*.blockmap
           retention-days: 30
@@ -195,9 +194,10 @@ jobs:
         run: |
           shopt -s nullglob dotglob
           for dir in artifacts/fluxer-desktop-${CHANNEL}-*; do
-            [[ -d "$dir/upload_staging" ]] || continue
-            mv "$dir"/upload_staging/* "$dir"/
-            rmdir "$dir/upload_staging" || true
+            if [ -d "$dir/upload_staging" ]; then
+              mv "$dir"/upload_staging/* "$dir"/
+              rmdir "$dir/upload_staging" || true
+            fi
           done
           shopt -u nullglob dotglob
 

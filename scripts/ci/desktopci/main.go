@@ -354,7 +354,7 @@ func cmdUpload(args []string) error {
 	}
 
 	if macZip := found["mac-zip"]; macZip != "" {
-		macYml, err := generateLatestYml(macZip, *version, *pubDate, *channel, "macos", "universal")
+		macYml, err := generateLatestYml(macZip, *version, *pubDate, "universal")
 		if err != nil {
 			return fmt.Errorf("generate latest-mac.yml: %w", err)
 		}
@@ -366,7 +366,7 @@ func cmdUpload(args []string) error {
 			return fmt.Errorf("upload latest-mac.yml: %w", err)
 		}
 	} else if macDmg := found["mac-dmg"]; macDmg != "" {
-		macYml, err := generateLatestYml(macDmg, *version, *pubDate, *channel, "macos", "universal")
+		macYml, err := generateLatestYml(macDmg, *version, *pubDate, "universal")
 		if err != nil {
 			return fmt.Errorf("generate latest-mac.yml from dmg: %w", err)
 		}
@@ -380,7 +380,7 @@ func cmdUpload(args []string) error {
 	}
 
 	if winX64Exe := found["win-x64-exe"]; winX64Exe != "" {
-		winYml, err := generateLatestYml(winX64Exe, *version, *pubDate, *channel, "windows", "x64")
+		winYml, err := generateLatestYml(winX64Exe, *version, *pubDate, "x64")
 		if err != nil {
 			return fmt.Errorf("generate latest.yml (windows): %w", err)
 		}
@@ -394,7 +394,7 @@ func cmdUpload(args []string) error {
 	}
 
 	if linuxX64AppImage := found["linux-x64-appimage"]; linuxX64AppImage != "" {
-		linuxYml, err := generateLatestYml(linuxX64AppImage, *version, *pubDate, *channel, "linux", "x64")
+		linuxYml, err := generateLatestYml(linuxX64AppImage, *version, *pubDate, "x64")
 		if err != nil {
 			return fmt.Errorf("generate latest-linux.yml: %w", err)
 		}
@@ -411,7 +411,7 @@ func cmdUpload(args []string) error {
 	return nil
 }
 
-func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch string) ([]byte, error) {
+func generateLatestYml(artifactPath, version, pubDate, arch string) ([]byte, error) {
 	f, err := os.Open(artifactPath)
 	if err != nil {
 		return nil, err
@@ -430,48 +430,25 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 	}
 
 	filename := filepath.Base(artifactPath)
-	downloadURL := fmt.Sprintf("https://api.fluxer.app/dl/%s/%s/%s?channel=%s", platform, arch, getArtifactType(filename), channel)
-	sanitizedPath := fmt.Sprintf("fluxer-%s-%s.%s", version, arch, getArtifactExtension(filename))
+	ext := getArtifactExtension(filename)
+	relativePath := fmt.Sprintf("fluxer-%s-%s.%s", version, arch, ext)
 
 	latest := map[string]any{
 		"version":     version,
 		"releaseDate": pubDate,
 		"files": []map[string]any{
 			{
-				"url":    downloadURL,
+				"url":    relativePath,
 				"sha512": sha512Hash,
 				"size":   info.Size(),
 			},
 		},
-		"path":         sanitizedPath,
+		"path":         relativePath,
 		"sha512":       sha512Hash,
 		"releaseNotes": "",
 	}
 
 	return yaml.Marshal(latest)
-}
-
-func getArtifactType(filename string) string {
-	lower := strings.ToLower(filename)
-	suffixes := []struct {
-		suffix string
-		name   string
-	}{
-		{".exe", "setup"},
-		{".dmg", "dmg"},
-		{".zip", "zip"},
-		{".appimage", "appimage"},
-		{".deb", "deb"},
-		{".tar.gz", "tar_gz"},
-	}
-
-	for _, s := range suffixes {
-		if strings.HasSuffix(lower, s.suffix) {
-			return s.name
-		}
-	}
-
-	return "file"
 }
 
 func getArtifactExtension(filename string) string {

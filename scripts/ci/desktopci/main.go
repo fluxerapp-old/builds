@@ -72,7 +72,6 @@ func usage() {
   desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
 }
 
-// bump: increments v0.0.x tags, writes version/pub_date to GITHUB_OUTPUT, and tags/pushes.
 func cmdBump() error {
 	tagGlob := envOr("TAG_GLOB", "v0.0.*")
 	tagPrefix := envOr("TAG_PREFIX", "v")
@@ -129,9 +128,6 @@ func cmdBump() error {
 	return gitPushTag(tagName)
 }
 
-// bump-web: increments web-build-X tags, writes build_number to GITHUB_OUTPUT, and tags/pushes.
-// Uses a global incrementing integer starting at 1000 (first build is 1001).
-// Shared between canary and stable web deployments.
 func cmdBumpWeb() error {
 	const tagPrefix = "web-build-"
 	const tagGlob = "web-build-*"
@@ -182,8 +178,6 @@ func cmdBumpWeb() error {
 	return gitPushTag(tagName)
 }
 
-// cmdUpload uploads Electron build artifacts to S3.
-// Electron-builder generates latest.yml files that electron-updater uses.
 func cmdUpload(args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
 	channel := fs.String("channel", "", "channel (stable/canary)")
@@ -281,19 +275,12 @@ func cmdUpload(args []string) error {
 			contentType: "application/vnd.microsoft.portable-executable",
 		},
 		{
+			id:          "mac-dmg",
 			label:       "macOS dmg",
 			dir:         macDir,
 			patterns:    []string{"*.dmg", "**/*.dmg"},
 			key:         fmt.Sprintf("%s/macos/universal/fluxer.dmg", *channel),
 			contentType: "application/x-apple-diskimage",
-		},
-		{
-			id:          "mac-zip",
-			label:       "macOS zip",
-			dir:         macDir,
-			patterns:    []string{"*.zip", "**/*.zip"},
-			key:         fmt.Sprintf("%s/macos/universal/fluxer.zip", *channel),
-			contentType: "application/zip",
 		},
 		{
 			id:          "linux-x64-appimage",
@@ -343,12 +330,8 @@ func cmdUpload(args []string) error {
 		return err
 	}
 
-	// Generate and upload latest.yml files for each platform
-	// electron-updater expects platform-specific latest.yml files
-
-	// latest-mac.yml
-	if macZip := found["mac-zip"]; macZip != "" {
-		macYml, err := generateLatestYml(macZip, *version, *pubDate, *channel, "macos", "universal")
+	if macDmg := found["mac-dmg"]; macDmg != "" {
+		macYml, err := generateLatestYml(macDmg, *version, *pubDate, *channel, "macos", "universal")
 		if err != nil {
 			return fmt.Errorf("generate latest-mac.yml: %w", err)
 		}
@@ -361,7 +344,6 @@ func cmdUpload(args []string) error {
 		}
 	}
 
-	// latest.yml (Windows - electron-updater default for Windows)
 	if winX64Exe := found["win-x64-exe"]; winX64Exe != "" {
 		winYml, err := generateLatestYml(winX64Exe, *version, *pubDate, *channel, "windows", "x64")
 		if err != nil {
@@ -376,7 +358,6 @@ func cmdUpload(args []string) error {
 		}
 	}
 
-	// latest-linux.yml
 	if linuxX64AppImage := found["linux-x64-appimage"]; linuxX64AppImage != "" {
 		linuxYml, err := generateLatestYml(linuxX64AppImage, *version, *pubDate, *channel, "linux", "x64")
 		if err != nil {
@@ -395,9 +376,7 @@ func cmdUpload(args []string) error {
 	return nil
 }
 
-// generateLatestYml creates a latest.yml file for electron-updater
 func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch string) ([]byte, error) {
-	// Compute SHA512 hash
 	f, err := os.Open(artifactPath)
 	if err != nil {
 		return nil, err
@@ -410,7 +389,6 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 	}
 	sha512Hash := base64.StdEncoding.EncodeToString(hash.Sum(nil))
 
-	// Get file info
 	info, err := os.Stat(artifactPath)
 	if err != nil {
 		return nil, err
@@ -437,7 +415,6 @@ func generateLatestYml(artifactPath, version, pubDate, channel, platform, arch s
 	return yaml.Marshal(latest)
 }
 
-// getArtifactType returns a URL-friendly artifact type from filename
 func getArtifactType(filename string) string {
 	lower := strings.ToLower(filename)
 	suffixes := []struct {

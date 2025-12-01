@@ -110,6 +110,8 @@ jobs:
 
       - name: Build Electron main process
         working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: ${{ env.CHANNEL }}
         run: pnpm electron:compile
 
       - name: Build Electron app (macOS)

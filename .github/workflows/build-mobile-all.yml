@@ -1,0 +1,85 @@
+name: Build All Mobile Apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Build channel'
+        required: true
+        type: choice
+        options:
+          - canary
+          - stable
+        default: 'canary'
+      platforms:
+        description: 'Platforms to build (comma-separated: ios,android)'
+        required: true
+        default: 'ios,android'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  trigger-ios:
+    name: Trigger iOS Build
+    runs-on: ubuntu-latest
+    if: contains(github.event.inputs.platforms, 'ios')
+    steps:
+      - name: Trigger iOS workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const channel = '${{ github.event.inputs.channel }}';
+            const workflow = channel === 'stable'
+              ? 'build-mobile-ios-stable.yml'
+              : 'build-mobile-ios-canary.yml';
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflow,
+              ref: context.ref
+            });
+
+            console.log(`Triggered ${workflow}`);
+
+  trigger-android:
+    name: Trigger Android Build
+    runs-on: ubuntu-latest
+    if: contains(github.event.inputs.platforms, 'android')
+    steps:
+      - name: Trigger Android workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const channel = '${{ github.event.inputs.channel }}';
+            const workflow = channel === 'stable'
+              ? 'build-mobile-android-stable.yml'
+              : 'build-mobile-android-canary.yml';
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflow,
+              ref: context.ref
+            });
+
+            console.log(`Triggered ${workflow}`);
+
+  summary:
+    name: Build Summary
+    needs: [trigger-ios, trigger-android]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create summary
+        run: |
+          echo "### Mobile Build Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Channel:** ${{ github.event.inputs.channel }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** ${{ github.event.inputs.platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the Actions tab to monitor individual build progress." >> $GITHUB_STEP_SUMMARY

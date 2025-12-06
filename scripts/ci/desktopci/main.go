@@ -69,7 +69,7 @@ func usage() {
 	fmt.Println(`Usage:
   desktopci bump
   desktopci bump-web
-  desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso>`)
+  desktopci upload --channel <ch> --artifacts <dir> --endpoint <url> --bucket <name> --version <ver> --pub-date <iso> [--flatpak-gpg-public-key <base64>]`)
 }
 
 func cmdBump() error {
@@ -141,7 +141,6 @@ func cmdBumpWeb() error {
 		return err
 	}
 
-	// Retry loop to handle concurrent builds atomically
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if err := gitFetchTags(); err != nil {
 			return err
@@ -160,21 +159,16 @@ func cmdBumpWeb() error {
 		num++
 		tagName := fmt.Sprintf("%s%d", tagPrefix, num)
 
-		// Try to create the tag locally
 		if err := gitTag(tagName); err != nil {
-			// Tag already exists locally, retry with next number
 			continue
 		}
 
-		// Try to push the tag atomically
 		if err := gitPushTag(tagName); err != nil {
-			// Push failed (likely remote tag exists), delete local tag and retry
 			_ = exec.Command("git", "tag", "-d", tagName).Run()
 			fmt.Printf("Tag %s already exists on remote; retrying with next number (attempt %d/%d)\n", tagName, attempt+1, maxRetries)
 			continue
 		}
 
-		// Success! Output the build number
 		if out := os.Getenv("GITHUB_OUTPUT"); out != "" {
 			f, err := os.OpenFile(out, os.O_APPEND|os.O_WRONLY, 0o644)
 			if err != nil {
@@ -201,6 +195,7 @@ func cmdUpload(args []string) error {
 	bucket := fs.String("bucket", "", "S3 bucket name")
 	version := fs.String("version", "", "version string")
 	pubDate := fs.String("pub-date", "", "ISO8601 pub date")
+	flatpakGPGPublicKey := fs.String("flatpak-gpg-public-key", "", "Base64-encoded GPG public key for .flatpakref files")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -408,6 +403,35 @@ func cmdUpload(args []string) error {
 	}
 
 	fmt.Println("Electron artifacts uploaded successfully!")
+
+	flatpakRepoDirs := []string{
+		filepath.Join(linuxX64Dir, "fluxer_app", "flatpak", "repo", *channel),
+		filepath.Join(linuxArm64Dir, "fluxer_app", "flatpak", "repo", *channel),
+	}
+
+	var flatpakRepoDir string
+	for _, dir := range flatpakRepoDirs {
+		if _, err := os.Stat(dir); err == nil {
+			flatpakRepoDir = dir
+			break
+		}
+	}
+
+	if flatpakRepoDir != "" {
+		fmt.Printf("Uploading Flatpak repository from %s\n", flatpakRepoDir)
+		if err := uploadFlatpakRepo(uploader, flatpakRepoDir, *channel); err != nil {
+			return fmt.Errorf("upload flatpak repo: %w", err)
+		}
+
+		if err := uploadFlatpakRefs(uploader, *channel, *flatpakGPGPublicKey); err != nil {
+			return fmt.Errorf("upload flatpak refs: %w", err)
+		}
+
+		fmt.Println("Flatpak repository uploaded successfully!")
+	} else {
+		fmt.Println("No Flatpak repository found, skipping Flatpak upload")
+	}
+
 	return nil
 }
 
@@ -505,4 +529,93 @@ func gitPushTag(tag string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// uploadFlatpakRepo recursively uploads an OSTree repository to S3
+func uploadFlatpakRepo(uploader func(string, string, string) error, repoDir, channel string) error {
+	return filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(repoDir, path)
+		if err != nil {
+			return err
+		}
+
+		s3Key := fmt.Sprintf("flatpak/%s/repo/%s", channel, filepath.ToSlash(relPath))
+
+		contentType := getOSTreeContentType(relPath)
+
+		fmt.Printf("  Uploading %s\n", s3Key)
+		return uploader(path, s3Key, contentType)
+	})
+}
+
+// getOSTreeContentType returns the appropriate content type for OSTree repo files
+func getOSTreeContentType(path string) string {
+	lower := strings.ToLower(path)
+
+	switch {
+	case strings.HasSuffix(lower, ".xml"):
+		return "application/xml"
+	case strings.HasSuffix(lower, ".sig"):
+		return "application/pgp-signature"
+	case strings.HasPrefix(filepath.Base(lower), "config"):
+		return "text/plain"
+	case strings.HasPrefix(filepath.Base(lower), "summary"):
+		return "application/octet-stream"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// uploadFlatpakRefs generates and uploads .flatpakref files for easy installation
+func uploadFlatpakRefs(uploader func(string, string, string) error, channel, gpgPublicKey string) error {
+	appID := "app.fluxer.Fluxer"
+	if channel == "canary" {
+		appID = "app.fluxer.FluxerCanary"
+	}
+
+	arches := []string{"x86_64", "aarch64"}
+
+	for _, arch := range arches {
+		refContent := generateFlatpakRef(appID, channel, gpgPublicKey)
+
+		tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("fluxer-%s-%s.flatpakref", channel, arch))
+		if err := os.WriteFile(tmpFile, []byte(refContent), 0o644); err != nil {
+			return fmt.Errorf("write flatpakref temp file: %w", err)
+		}
+		defer os.Remove(tmpFile)
+
+		s3Key := fmt.Sprintf("flatpak/%s/%s/fluxer-%s-%s.flatpakref", channel, arch, channel, arch)
+		fmt.Printf("  Uploading %s\n", s3Key)
+		if err := uploader(tmpFile, s3Key, "application/vnd.flatpak.ref"); err != nil {
+			return fmt.Errorf("upload flatpakref %s: %w", arch, err)
+		}
+	}
+
+	return nil
+}
+
+// generateFlatpakRef creates the content of a .flatpakref file
+func generateFlatpakRef(appID, channel, gpgPublicKey string) string {
+	var builder strings.Builder
+
+	builder.WriteString("[Flatpak Ref]\n")
+	builder.WriteString(fmt.Sprintf("Name=%s\n", appID))
+	builder.WriteString(fmt.Sprintf("Branch=%s\n", channel))
+	builder.WriteString(fmt.Sprintf("Url=https://api.fluxer.app/dl/flatpak/%s/repo\n", channel))
+	builder.WriteString("IsRuntime=false\n")
+
+	if gpgPublicKey != "" {
+		builder.WriteString(fmt.Sprintf("GPGKey=%s\n", gpgPublicKey))
+	}
+
+	builder.WriteString("RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo\n")
+
+	return builder.String()
 }

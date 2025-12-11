@@ -1,20 +1,24 @@
 name: Build iOS App (Stable)
 
 on:
-  repository_dispatch:
-    types: [build-mobile-ios-stable]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag, or commit SHA)'
+        required: false
+        default: 'stable'
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-mobile-ios-stable-${{ github.event.client_payload.commit_sha }}
+  group: build-mobile-ios-stable-${{ inputs.ref || 'stable' }}
   cancel-in-progress: true
 
 env:
   CHANNEL: stable
-  COMMIT_SHA: ${{ github.event.client_payload.commit_sha }}
-  SOURCE_REF: ${{ github.event.client_payload.ref }}
+  SOURCE_REF: ${{ inputs.ref || 'stable' }}
 
 jobs:
   build:
@@ -25,7 +29,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
-          ref: ${{ env.COMMIT_SHA }}
+          ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Set up pnpm

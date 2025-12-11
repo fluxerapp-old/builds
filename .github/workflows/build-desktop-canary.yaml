@@ -1,20 +1,39 @@
 name: Build Desktop App (Canary)
 
 on:
-  repository_dispatch:
-    types: [build-desktop-canary]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag, or commit SHA)'
+        required: false
+        default: 'canary'
+        type: string
+      skip_windows:
+        description: 'Skip Windows builds'
+        required: false
+        default: false
+        type: boolean
+      skip_macos:
+        description: 'Skip macOS builds'
+        required: false
+        default: false
+        type: boolean
+      skip_linux:
+        description: 'Skip Linux builds'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-desktop-canary-${{ github.event.client_payload.commit_sha }}
+  group: build-desktop-canary-${{ inputs.ref || 'canary' }}
   cancel-in-progress: true
 
 env:
   CHANNEL: canary
-  COMMIT_SHA: ${{ github.event.client_payload.commit_sha }}
-  SOURCE_REF: ${{ github.event.client_payload.ref }}
+  SOURCE_REF: ${{ inputs.ref || 'canary' }}
 
 jobs:
   matrix:
@@ -35,9 +54,9 @@ jobs:
             {"platform":"linux","arch":"arm64","os":"ubuntu-22.04-arm","electron_arch":"arm64"}
           ]'
 
-          SKIP_WINDOWS="${{ github.event.client_payload.skip_windows }}"
-          SKIP_MACOS="${{ github.event.client_payload.skip_macos }}"
-          SKIP_LINUX="${{ github.event.client_payload.skip_linux }}"
+          SKIP_WINDOWS="${{ inputs.skip_windows }}"
+          SKIP_MACOS="${{ inputs.skip_macos }}"
+          SKIP_LINUX="${{ inputs.skip_linux }}"
 
           node -e "const platforms = ${platforms}; const skipWin = '${SKIP_WINDOWS}' === 'true'; const skipMac = '${SKIP_MACOS}' === 'true'; const skipLinux = '${SKIP_LINUX}' === 'true'; const filtered = platforms.filter(p => !(skipWin && p.platform==='windows') && !(skipMac && p.platform==='macos') && !(skipLinux && p.platform==='linux')); console.log('matrix=' + JSON.stringify({include: filtered}));" >> "$GITHUB_OUTPUT"
 
@@ -48,22 +67,30 @@ jobs:
       version: ${{ steps.bump.outputs.version }}
       pub_date: ${{ steps.bump.outputs.pub_date }}
     steps:
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Checkout builds repository
+        uses: actions/checkout@v5
         with:
-          go-version: 'stable'
+          fetch-depth: 0
 
       - name: Checkout private repository
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
-          ref: ${{ env.COMMIT_SHA }}
+          ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
-          fetch-depth: 0
+          path: fluxer
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
 
       - name: Calculate and push next tag
         id: bump
-        working-directory: scripts/ci/desktopci
+        working-directory: fluxer/scripts/ci/desktopci
+        env:
+          TAG_GLOB: 'desktop-canary-v0.0.*'
+          TAG_PREFIX: 'desktop-canary-v'
         run: go run . bump
 
   build:
@@ -79,7 +106,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
-          ref: ${{ env.COMMIT_SHA }}
+          ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Set up pnpm
@@ -215,7 +242,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
-          ref: ${{ env.COMMIT_SHA }}
+          ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Install Flatpak dependencies

@@ -1,20 +1,24 @@
 name: Build iOS App (Canary)
 
 on:
-  repository_dispatch:
-    types: [build-mobile-ios-canary]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag, or commit SHA)'
+        required: false
+        default: 'canary'
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-mobile-ios-canary-${{ github.event.client_payload.commit_sha }}
+  group: build-mobile-ios-canary-${{ inputs.ref || 'canary' }}
   cancel-in-progress: true
 
 env:
   CHANNEL: canary
-  COMMIT_SHA: ${{ github.event.client_payload.commit_sha }}
-  SOURCE_REF: ${{ github.event.client_payload.ref }}
+  SOURCE_REF: ${{ inputs.ref || 'canary' }}
 
 jobs:
   build:
@@ -25,7 +29,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
-          ref: ${{ env.COMMIT_SHA }}
+          ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Set up pnpm

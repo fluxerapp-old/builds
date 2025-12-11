@@ -115,12 +115,21 @@ jobs:
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
 
     steps:
-      - name: Checkout private repository
+      - name: Checkout private repository (Unix)
+        if: runner.os != 'Windows'
         uses: actions/checkout@v5
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Checkout private repository (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4

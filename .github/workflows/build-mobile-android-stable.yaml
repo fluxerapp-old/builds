@@ -23,12 +23,12 @@ env:
 jobs:
   build:
     name: Build Android App (Stable)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       apk_path: ${{ steps.build.outputs.apk_path }}
     steps:
       - name: Checkout private repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
@@ -40,7 +40,7 @@ jobs:
           version: 10.22.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -74,15 +74,10 @@ jobs:
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
+        working-directory: fluxer_app/android
         with:
           ruby-version: '3.2'
-          bundler-cache: false
-
-      - name: Install Fastlane
-        working-directory: fluxer_app/android
-        run: |
-          gem install bundler
-          bundle install
+          bundler-cache: true  # runs bundle install and caches gems
 
       - name: Build Android APK and AAB
         id: build
@@ -110,7 +105,7 @@ jobs:
   notify:
     name: Notify build completion
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Summary
         run: |

@@ -31,12 +31,12 @@ This is a **public repository** used to run builds on GitHub's free CI runners. 
 |----------|-------------|--------|
 | Windows | x64 | `windows-latest` |
 | Windows | ARM64 | `windows-11-arm` |
-| macOS | x64 | `macos-14` (cross-compiled) |
-| macOS | ARM64 | `macos-14` |
+| macOS | x64 | `macos-15-large` |
+| macOS | ARM64 | `macos-15-xlarge` |
 | Linux | x64 | `ubuntu-latest` |
 | Linux | ARM64 | `ubuntu-22.04-arm` |
 | Android | - | `ubuntu-latest` |
-| iOS | - | `macos-14` |
+| iOS | - | `macos-15-xlarge` |
 
 ## Required Secrets
 

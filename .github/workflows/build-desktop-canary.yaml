@@ -48,8 +48,8 @@ jobs:
           platforms='[
             {"platform":"windows","arch":"x64","os":"windows-latest","electron_arch":"x64"},
             {"platform":"windows","arch":"arm64","os":"windows-11-arm","electron_arch":"arm64"},
-            {"platform":"macos","arch":"x64","os":"macos-14","electron_arch":"x64"},
-            {"platform":"macos","arch":"arm64","os":"macos-14","electron_arch":"arm64"},
+            {"platform":"macos","arch":"x64","os":"macos-15-large","electron_arch":"x64"},
+            {"platform":"macos","arch":"arm64","os":"macos-15-xlarge","electron_arch":"arm64"},
             {"platform":"linux","arch":"x64","os":"ubuntu-latest","electron_arch":"x64"},
             {"platform":"linux","arch":"arm64","os":"ubuntu-22.04-arm","electron_arch":"arm64"}
           ]'

@@ -23,7 +23,7 @@ env:
 jobs:
   build:
     name: Build iOS App (Canary)
-    runs-on: macos-14
+    runs-on: macos-15-xlarge
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v5

@@ -152,7 +152,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: fluxer_app
-        run: pnpm install --frozen-lockfile --no-optional
+        run: pnpm install --frozen-lockfile
 
       - name: Install Python setuptools (for node-gyp)
         if: matrix.platform == 'macos'

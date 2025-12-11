@@ -72,26 +72,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout private repository
-        uses: actions/checkout@v5
-        with:
-          repository: fluxerapp-old/fluxer
-          ref: ${{ env.SOURCE_REF }}
-          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
-          path: fluxer
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
       - name: Calculate and push next tag
         id: bump
-        working-directory: fluxer/scripts/ci/desktopci
-        env:
-          TAG_GLOB: 'desktop-canary-v0.0.*'
-          TAG_PREFIX: 'desktop-canary-v'
-        run: go run . bump
+        run: |
+          TAG_PREFIX="desktop-canary-v"
+          TAG_GLOB="desktop-canary-v0.0.*"
+
+          git fetch --tags --force
+
+          LATEST=$(git tag -l "$TAG_GLOB" --sort=-v:refname | head -n1)
+          NUM=0
+          if [ -n "$LATEST" ]; then
+            NUM=$(echo "$LATEST" | sed "s/${TAG_PREFIX}//" | cut -d. -f3)
+          fi
+          NUM=$((NUM + 1))
+
+          VERSION="0.0.${NUM}"
+          TAG_NAME="${TAG_PREFIX}${VERSION}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "pub_date=${PUB_DATE}" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists; skipping push"
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi
+
+          echo "Created tag: $TAG_NAME (version: $VERSION)"
 
   build:
     name: Build for ${{ matrix.platform }} (${{ matrix.arch }})

@@ -1,0 +1,118 @@
+name: Build Android App (Stable)
+
+on:
+  repository_dispatch:
+    types: [build-mobile-android-stable]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-mobile-android-stable-${{ github.event.client_payload.commit_sha }}
+  cancel-in-progress: true
+
+env:
+  CHANNEL: stable
+  COMMIT_SHA: ${{ github.event.client_payload.commit_sha }}
+  SOURCE_REF: ${{ github.event.client_payload.ref }}
+
+jobs:
+  build:
+    name: Build Android App (Stable)
+    runs-on: ubuntu-latest
+    outputs:
+      apk_path: ${{ steps.build.outputs.apk_path }}
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ref: ${{ env.COMMIT_SHA }}
+          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: fluxer_app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: fluxer_app
+        run: pnpm install --frozen-lockfile
+
+      - name: Decode and install Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > fluxer_app/android/app/google-services.json
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Decode Android keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > fluxer_app/android/app/release.keystore
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: false
+
+      - name: Install Fastlane
+        working-directory: fluxer_app/android
+        run: |
+          gem install bundler
+          bundle install
+
+      - name: Build Android APK and AAB
+        id: build
+        working-directory: fluxer_app/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          bundle exec fastlane android release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-android-${{ env.CHANNEL }}-apk
+          path: fluxer_app/android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Cleanup keystore and secrets
+        if: always()
+        run: |
+          rm -f fluxer_app/android/app/release.keystore
+          rm -f fluxer_app/android/app/google-services.json
+
+  notify:
+    name: Notify build completion
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "### Android Stable Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Build artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "- APK: Available in artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download APK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

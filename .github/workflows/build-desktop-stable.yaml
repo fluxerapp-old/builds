@@ -1,0 +1,252 @@
+name: Build Desktop App (Stable)
+
+on:
+  repository_dispatch:
+    types: [build-desktop-stable]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-desktop-stable-${{ github.event.client_payload.commit_sha }}
+  cancel-in-progress: true
+
+env:
+  CHANNEL: stable
+  COMMIT_SHA: ${{ github.event.client_payload.commit_sha }}
+  SOURCE_REF: ${{ github.event.client_payload.ref }}
+
+jobs:
+  matrix:
+    name: Resolve platforms to build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set filtered matrix
+        id: set-matrix
+        run: |
+          platforms='[
+            {"platform":"windows","arch":"x64","os":"windows-latest","electron_arch":"x64"},
+            {"platform":"windows","arch":"arm64","os":"windows-11-arm","electron_arch":"arm64"},
+            {"platform":"macos","arch":"x64","os":"macos-14","electron_arch":"x64"},
+            {"platform":"macos","arch":"arm64","os":"macos-14","electron_arch":"arm64"},
+            {"platform":"linux","arch":"x64","os":"ubuntu-latest","electron_arch":"x64"},
+            {"platform":"linux","arch":"arm64","os":"ubuntu-22.04-arm","electron_arch":"arm64"}
+          ]'
+
+          SKIP_WINDOWS="${{ github.event.client_payload.skip_windows }}"
+          SKIP_MACOS="${{ github.event.client_payload.skip_macos }}"
+          SKIP_LINUX="${{ github.event.client_payload.skip_linux }}"
+
+          node -e "const platforms = ${platforms}; const skipWin = '${SKIP_WINDOWS}' === 'true'; const skipMac = '${SKIP_MACOS}' === 'true'; const skipLinux = '${SKIP_LINUX}' === 'true'; const filtered = platforms.filter(p => !(skipWin && p.platform==='windows') && !(skipMac && p.platform==='macos') && !(skipLinux && p.platform==='linux')); console.log('matrix=' + JSON.stringify({include: filtered}));" >> "$GITHUB_OUTPUT"
+
+  version:
+    name: Bump Stable Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      pub_date: ${{ steps.bump.outputs.pub_date }}
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Checkout private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ref: ${{ env.COMMIT_SHA }}
+          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
+          fetch-depth: 0
+
+      - name: Calculate and push next tag
+        id: bump
+        working-directory: scripts/ci/desktopci
+        run: go run . bump
+
+  build:
+    name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
+    needs: [version, matrix]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ref: ${{ env.COMMIT_SHA }}
+          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: fluxer_app/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: fluxer_app
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python setuptools (for node-gyp)
+        if: matrix.platform == 'macos'
+        run: brew install python-setuptools
+
+      - name: Install Linux build dependencies (X11 + fpm + Flatpak)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm flatpak flatpak-builder ostree libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+          sudo gem install --no-document fpm
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+
+      - name: Update version in package.json
+        working-directory: fluxer_app
+        run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build Electron main process
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: ${{ env.CHANNEL }}
+        run: pnpm electron:compile
+
+      - name: Build Electron app (macOS)
+        if: matrix.platform == 'macos'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm exec electron-builder --config electron-builder.yaml --mac --${{ matrix.electron_arch }}
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'windows'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+        run: pnpm exec electron-builder --config electron-builder.yaml --win --${{ matrix.electron_arch }}
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: fluxer_app
+        env:
+          BUILD_CHANNEL: stable
+          USE_SYSTEM_FPM: true
+        run: pnpm exec electron-builder --config electron-builder.yaml --linux --${{ matrix.electron_arch }}
+
+      - name: Validate Flatpak AppStream metadata
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get install -y appstream
+          APP_VERSION=$(node -e "console.log(require('./fluxer_app/package.json').version)")
+          APP_RELEASE_DATE=$(date -u +%Y-%m-%d)
+          mkdir -p fluxer_app/flatpak/build/appstream
+          for appdata in app.fluxer.Fluxer app.fluxer.FluxerCanary; do
+            sed -e "s/@APP_VERSION@/${APP_VERSION}/g" -e "s/@APP_RELEASE_DATE@/${APP_RELEASE_DATE}/g" \
+              "fluxer_app/flatpak/${appdata}.appdata.xml" > "fluxer_app/flatpak/build/appstream/${appdata}.appdata.xml"
+            appstreamcli validate --pedantic "fluxer_app/flatpak/build/appstream/${appdata}.appdata.xml"
+          done
+
+      - name: Build Flatpak package
+        if: matrix.platform == 'linux'
+        working-directory: fluxer_app
+        env:
+          CHANNEL: ${{ env.CHANNEL }}
+          ARCHES: ${{ matrix.electron_arch }}
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+          FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
+          FLATPAK_GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
+        run: |
+          chmod +x flatpak/build.sh
+          ./flatpak/build.sh
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p upload_staging
+          if [ -d "fluxer_app/dist-electron" ]; then
+            cp -r fluxer_app/dist-electron/* upload_staging/ || true
+          fi
+          ls -la upload_staging/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            upload_staging/*.exe
+            upload_staging/*.exe.blockmap
+            upload_staging/*.dmg
+            upload_staging/*.zip
+            upload_staging/*.zip.blockmap
+            upload_staging/*.AppImage
+            upload_staging/*.deb
+            upload_staging/*.tar.gz
+            upload_staging/*.yml
+            fluxer_app/flatpak/repo/**
+          retention-days: 30
+
+  upload:
+    name: Upload builds to S3
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      AWS_S3_ENDPOINT: https://s3.us-east-va.io.cloud.ovh.us
+      AWS_S3_BUCKET: fluxer-dl
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v5
+        with:
+          repository: fluxerapp-old/fluxer
+          ref: ${{ env.COMMIT_SHA }}
+          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact directories for uploader
+        shell: bash
+        run: |
+          shopt -s nullglob dotglob
+          for dir in artifacts/fluxer-desktop-${CHANNEL}-*; do
+            if [ -d "$dir/upload_staging" ]; then
+              mv "$dir"/upload_staging/* "$dir"/
+              rmdir "$dir/upload_staging" || true
+            fi
+          done
+          shopt -u nullglob dotglob
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Upload all builds to S3
+        working-directory: scripts/ci/desktopci
+        env:
+          FLATPAK_GPG_PUBLIC_KEY: ${{ secrets.FLATPAK_GPG_PUBLIC_KEY }}
+        run: |
+          FLATPAK_ARGS=""
+          if [ -n "${FLATPAK_GPG_PUBLIC_KEY}" ]; then
+            FLATPAK_ARGS="--flatpak-gpg-public-key ${FLATPAK_GPG_PUBLIC_KEY}"
+          fi
+          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}" ${FLATPAK_ARGS}

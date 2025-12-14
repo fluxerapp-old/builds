@@ -77,17 +77,19 @@ jobs:
         with:
           ruby-version: '3.2'
           bundler-cache: true  # runs bundle install and caches gems
-          working-directory: fluxer_app/android
+          working-directory: fluxer_app
 
       - name: Install Fastlane plugins
-        working-directory: fluxer_app/android
-        run: |
-          bundle exec fastlane install_plugins
+        working-directory: fluxer_app
+        env:
+          BUNDLE_GEMFILE: Gemfile
+        run: bundle exec fastlane install_plugins
 
       - name: Build Android APK and AAB
         id: build
         working-directory: fluxer_app/android
         env:
+          BUNDLE_GEMFILE: ../Gemfile
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}

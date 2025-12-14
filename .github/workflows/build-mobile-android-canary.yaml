@@ -94,7 +94,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          bundle exec fastlane android beta
+          bundle exec fastlane android android_beta
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

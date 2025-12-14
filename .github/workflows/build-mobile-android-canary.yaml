@@ -87,9 +87,9 @@ jobs:
 
       - name: Build Android APK and AAB
         id: build
-        working-directory: fluxer_app/android
+        working-directory: fluxer_app
         env:
-          BUNDLE_GEMFILE: ../Gemfile
+          BUNDLE_GEMFILE: Gemfile
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}

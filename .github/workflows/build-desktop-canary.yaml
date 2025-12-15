@@ -215,7 +215,7 @@ jobs:
           APP_VERSION=$(node -e "console.log(require('./fluxer_app/package.json').version)")
           APP_RELEASE_DATE=$(date -u +%Y-%m-%d)
           mkdir -p fluxer_app/flatpak/build/appstream
-          for appdata in app.fluxer.metainfo.xml app.fluxer.canary.metainfo.xml; do
+          for appdata in app.fluxer.fluxer.metainfo.xml app.fluxer.fluxer.canary.metainfo.xml; do
             sed -e "s/@APP_VERSION@/${APP_VERSION}/g" -e "s/@APP_RELEASE_DATE@/${APP_RELEASE_DATE}/g" \
               "fluxer_app/flatpak/${appdata}" > "fluxer_app/flatpak/build/appstream/${appdata}"
             appstreamcli validate --pedantic "fluxer_app/flatpak/build/appstream/${appdata}"
@@ -325,8 +325,8 @@ jobs:
           CHANNEL: ${{ env.CHANNEL }}
         run: |
           set -euo pipefail
-          APP_ID="app.fluxer"
-          [ "${CHANNEL}" = "canary" ] && APP_ID="app.fluxer.canary"
+          APP_ID="app.fluxer.fluxer"
+          [ "${CHANNEL}" = "canary" ] && APP_ID="app.fluxer.fluxer.canary"
 
           HEAD_FILE=$(find artifacts -path "*flatpak/repo/${CHANNEL}/refs/heads/app/${APP_ID}/x86_64/${CHANNEL}" | head -n 1)
           if [ -z "${HEAD_FILE}" ]; then

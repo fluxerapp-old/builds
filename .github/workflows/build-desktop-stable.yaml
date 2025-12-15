@@ -215,10 +215,10 @@ jobs:
           APP_VERSION=$(node -e "console.log(require('./fluxer_app/package.json').version)")
           APP_RELEASE_DATE=$(date -u +%Y-%m-%d)
           mkdir -p fluxer_app/flatpak/build/appstream
-          for appdata in app.fluxer.Fluxer app.fluxer.FluxerCanary; do
+          for appdata in app.fluxer.metainfo.xml app.fluxer.canary.metainfo.xml; do
             sed -e "s/@APP_VERSION@/${APP_VERSION}/g" -e "s/@APP_RELEASE_DATE@/${APP_RELEASE_DATE}/g" \
-              "fluxer_app/flatpak/${appdata}.appdata.xml" > "fluxer_app/flatpak/build/appstream/${appdata}.appdata.xml"
-            appstreamcli validate --pedantic "fluxer_app/flatpak/build/appstream/${appdata}.appdata.xml"
+              "fluxer_app/flatpak/${appdata}" > "fluxer_app/flatpak/build/appstream/${appdata}"
+            appstreamcli validate --pedantic "fluxer_app/flatpak/build/appstream/${appdata}"
           done
 
       - name: Build Flatpak package

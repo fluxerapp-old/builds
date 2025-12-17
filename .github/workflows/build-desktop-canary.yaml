@@ -158,16 +158,14 @@ jobs:
         if: matrix.platform == 'macos'
         run: brew install python-setuptools
 
-      - name: Install Linux build dependencies (X11 + fpm + Flatpak)
+      - name: Install Linux build dependencies (X11 + fpm)
         if: matrix.platform == 'linux'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm flatpak flatpak-builder ostree libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+          sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
           sudo gem install --no-document fpm
-          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
 
       - name: Update version in package.json
         working-directory: fluxer_app
@@ -206,34 +204,7 @@ jobs:
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}
 
-      - name: Validate Flatpak AppStream metadata
-        if: matrix.platform == 'linux'
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get install -y appstream
-          APP_VERSION=$(node -e "console.log(require('./fluxer_app/package.json').version)")
-          APP_RELEASE_DATE=$(date -u +%Y-%m-%d)
-          mkdir -p fluxer_app/flatpak/build/appstream
-          for appdata in app.fluxer.fluxer.metainfo.xml app.fluxer.fluxer.canary.metainfo.xml; do
-            sed -e "s/@APP_VERSION@/${APP_VERSION}/g" -e "s/@APP_RELEASE_DATE@/${APP_RELEASE_DATE}/g" \
-              "fluxer_app/flatpak/${appdata}" > "fluxer_app/flatpak/build/appstream/${appdata}"
-            appstreamcli validate --pedantic "fluxer_app/flatpak/build/appstream/${appdata}"
-          done
-
-      - name: Build Flatpak package
-        if: matrix.platform == 'linux'
-        working-directory: fluxer_app
-        env:
-          CHANNEL: ${{ env.CHANNEL }}
-          ARCHES: ${{ matrix.electron_arch }}
-          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
-          FLATPAK_GPG_PASSPHRASE: ${{ secrets.FLATPAK_GPG_PASSPHRASE }}
-          FLATPAK_GPG_KEY_ID: ${{ secrets.FLATPAK_GPG_KEY_ID }}
-        run: |
-          chmod +x flatpak/build.sh
-          ./flatpak/build.sh
-
+  
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -257,8 +228,7 @@ jobs:
             upload_staging/*.deb
             upload_staging/*.tar.gz
             upload_staging/*.yml
-            fluxer_app/flatpak/repo/**
-          retention-days: 30
+            retention-days: 30
 
   upload:
     name: Upload builds to S3
@@ -278,15 +248,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Install Flatpak dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak ostree
-          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
-
+    
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -311,47 +273,7 @@ jobs:
 
       - name: Upload all builds to S3
         working-directory: scripts/ci/desktopci
-        env:
-          FLATPAK_GPG_PUBLIC_KEY: ${{ secrets.FLATPAK_GPG_PUBLIC_KEY }}
         run: |
-          FLATPAK_ARGS=""
-          if [ -n "${FLATPAK_GPG_PUBLIC_KEY}" ]; then
-            FLATPAK_ARGS="--flatpak-gpg-public-key ${FLATPAK_GPG_PUBLIC_KEY}"
-          fi
-          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}" ${FLATPAK_ARGS}
+          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
 
-      - name: Verify Flatpak publication
-        env:
-          CHANNEL: ${{ env.CHANNEL }}
-        run: |
-          set -euo pipefail
-          APP_ID="app.fluxer.fluxer"
-          [ "${CHANNEL}" = "canary" ] && APP_ID="app.fluxer.fluxer.canary"
-
-          HEAD_FILE=$(find artifacts -path "*flatpak/repo/${CHANNEL}/refs/heads/app/${APP_ID}/x86_64/${CHANNEL}" | head -n 1)
-          if [ -z "${HEAD_FILE}" ]; then
-            echo "Head ref file not found in artifacts" >&2
-            exit 1
-          fi
-          COMMIT=$(cat "${HEAD_FILE}")
-          if [ -z "${COMMIT}" ]; then
-            echo "Commit is empty in ${HEAD_FILE}" >&2
-            exit 1
-          fi
-
-          echo "Verifying commit ${COMMIT} is in remote summary..."
-          curl -fsSL "https://api.fluxer.app/dl/flatpak/${CHANNEL}/repo/summary" | strings | grep "${COMMIT}"
-          echo "Commit found in summary!"
-
-          echo "Verifying summary.sig exists..."
-          curl -fsSL -o /dev/null -w "%{http_code}" "https://api.fluxer.app/dl/flatpak/${CHANNEL}/repo/summary.sig" | grep -q "200"
-          echo "Summary signature file exists!"
-
-      - name: Smoke install Flatpak from API
-        env:
-          CHANNEL: ${{ env.CHANNEL }}
-        run: |
-          set -euo pipefail
-          sudo flatpak remote-delete fluxer-ci || true
-          curl -fsSL "https://api.fluxer.app/dl/linux/x64/flatpak?channel=${CHANNEL}" -o /tmp/fluxer.flatpakref
-          sudo flatpak install -y /tmp/fluxer.flatpakref
+    

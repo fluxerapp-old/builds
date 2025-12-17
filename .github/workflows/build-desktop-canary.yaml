@@ -213,6 +213,25 @@ jobs:
           fi
           ls -la upload_staging/
 
+      - name: Normalize updater YAML names (arm64)
+        if: matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upload_staging
+
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            if [[ -f latest.yml && ! -f latest-arm64.yml ]]; then
+              mv latest.yml latest-arm64.yml
+            fi
+          fi
+
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            if [[ -f latest-mac.yml && ! -f latest-mac-arm64.yml ]]; then
+              mv latest-mac.yml latest-mac-arm64.yml
+            fi
+          fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

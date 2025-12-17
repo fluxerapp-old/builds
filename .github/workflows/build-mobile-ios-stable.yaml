@@ -58,7 +58,7 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
-          bundler-cache: true  # runs bundle install and caches gems
+          bundler-cache: true # runs bundle install and caches gems
           working-directory: fluxer_app/ios
 
       - name: Setup iOS signing

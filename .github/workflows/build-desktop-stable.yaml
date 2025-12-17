@@ -204,7 +204,6 @@ jobs:
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.yaml --linux --${{ matrix.electron_arch }}
 
-      
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -228,7 +227,7 @@ jobs:
             upload_staging/*.deb
             upload_staging/*.tar.gz
             upload_staging/*.yml
-              retention-days: 30
+          retention-days: 30
 
   upload:
     name: Upload builds to S3

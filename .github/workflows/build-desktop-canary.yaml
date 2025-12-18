@@ -68,7 +68,7 @@ jobs:
       pub_date: ${{ steps.bump.outputs.pub_date }}
     steps:
       - name: Checkout builds repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -117,7 +117,7 @@ jobs:
     steps:
       - name: Checkout private repository (Unix)
         if: runner.os != 'Windows'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
@@ -125,7 +125,7 @@ jobs:
 
       - name: Checkout private repository (Windows)
         if: runner.os == 'Windows'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
@@ -134,10 +134,10 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.22.0
+          version: 10.26.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
@@ -229,7 +229,7 @@ jobs:
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -256,14 +256,14 @@ jobs:
       AWS_REGION: us-east-1
     steps:
       - name: Checkout private repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -280,7 +280,7 @@ jobs:
           shopt -u nullglob dotglob
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 'stable'
 

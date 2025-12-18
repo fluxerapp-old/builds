@@ -19,6 +19,7 @@ concurrency:
 env:
   CHANNEL: canary
   SOURCE_REF: ${{ inputs.ref || 'canary' }}
+  RCT_NEW_ARCH_ENABLED: '1'
 
 jobs:
   build:

@@ -19,6 +19,10 @@ concurrency:
 env:
   CHANNEL: canary
   SOURCE_REF: ${{ inputs.ref || 'canary' }}
+  # NDK version must match android/build.gradle ndkVersion
+  NDK_VERSION: '26.3.11579264'
+  # CMake version for native builds
+  CMAKE_VERSION: '3.22.1'
 
 jobs:
   build:
@@ -28,7 +32,7 @@ jobs:
       apk_path: ${{ steps.build.outputs.apk_path }}
     steps:
       - name: Checkout private repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
@@ -40,9 +44,9 @@ jobs:
           version: 10.22.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
           cache: pnpm
           cache-dependency-path: fluxer_app/pnpm-lock.yaml
 
@@ -66,6 +70,29 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install NDK and CMake
+        run: |
+          # Install specific NDK version required for React Native build
+          sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+          # Install CMake for native builds
+          sdkmanager --install "cmake;${{ env.CMAKE_VERSION }}"
+          # Verify installations
+          echo "NDK installed at: $ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          echo "CMake installed at: $ANDROID_HOME/cmake/${{ env.CMAKE_VERSION }}"
+
+      - name: Patch Gradle cache for std::format compatibility
+        run: |
+          # React Native 0.81.5 uses std::format which is not available in Android NDK's libc++
+          # The Gradle cache may contain prebuilt AAR with unpatched headers
+          # This script patches any cached graphicsConversions.h files
+          find ~/.gradle/caches -name "graphicsConversions.h" -type f 2>/dev/null | while read file; do
+            if grep -q 'std::format("{}%", dimension.value)' "$file" 2>/dev/null; then
+              sed -i 's/return std::format("{}%", dimension.value);/return std::to_string(dimension.value) + "%";/' "$file"
+              echo "Patched: $file"
+            fi
+          done
+          echo "Gradle cache patching complete"
+
       - name: Decode Android keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -76,7 +103,7 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
-          bundler-cache: true # runs bundle install and caches gems
+          bundler-cache: true
           working-directory: fluxer_app
 
       - name: Install Fastlane plugins
@@ -93,8 +120,10 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Disable Gradle configuration cache due to react-native-reanimated compatibility
+          GRADLE_OPTS: '-Dorg.gradle.configuration-cache=false'
         run: |
-          bundle exec fastlane android android_beta
+          bundle exec fastlane android_build_canary
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

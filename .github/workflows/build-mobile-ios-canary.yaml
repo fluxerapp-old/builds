@@ -45,6 +45,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: fluxer_app/pnpm-lock.yaml
 
+      - name: Determine runtime version
+        id: runtime-version
+        run: |
+          RUNTIME_VERSION=$(node -p 'const pkg=require("./fluxer_app/package.json"); console.log(`${pkg.version}-${process.env.CHANNEL}`);')
+          echo "runtime-version=$RUNTIME_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Export runtime environment
+        run: |
+          echo "FLUXER_RUNTIME_VERSION=${{ steps.runtime-version.outputs.runtime-version }}" >> $GITHUB_ENV
+          echo "FLUXER_RUNTIME_VERSION_OVERRIDE=${{ steps.runtime-version.outputs.runtime-version }}" >> $GITHUB_ENV
+
       - name: Install dependencies
         working-directory: fluxer_app
         run: pnpm install --frozen-lockfile

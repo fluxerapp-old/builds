@@ -285,6 +285,6 @@ jobs:
           go-version: 'stable'
 
       - name: Upload all builds to S3
-        working-directory: scripts/ci/desktopci
+        working-directory: fluxer_app/scripts/cmd/desktopci
         run: |
           go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

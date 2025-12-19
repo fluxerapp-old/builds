@@ -100,7 +100,7 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           FASTLANE_APPLE_ID: ${{ secrets.APPLE_ID }}
           FASTLANE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bundle exec fastlane ios_build_stable
+        run: bundle exec fastlane ios ios_build_stable
 
       - name: Upload to TestFlight
         working-directory: fluxer_app
@@ -108,7 +108,7 @@ jobs:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
-        run: bundle exec fastlane ios_beta
+        run: bundle exec fastlane ios ios_beta
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4

@@ -83,10 +83,17 @@ jobs:
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > fluxer_app/android/app/release.keystore
 
+      - name: Clean native build caches
+        working-directory: fluxer_app
+        run: |
+          rm -rf android/app/.cxx android/.gradle android/app/build/generated/source/codegen
+          echo "Cleaned native build caches"
+
       - name: Build Android APK and AAB
         working-directory: fluxer_app
         env:
           BUILD_CHANNEL: canary
+          NODE_ENV: production
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}

@@ -20,15 +20,12 @@ env:
   CHANNEL: canary
   SOURCE_REF: ${{ inputs.ref || 'canary' }}
 
-  PNPM_VERSION: 10.26.0
-  NODE_VERSION: "20"
-  JAVA_VERSION: "17"
-  RUBY_VERSION: "3.2"
-
   ANDROID_PLATFORM: "android-35"
-  BUILD_TOOLS: "35.0.0"
-  NDK_VERSION: "26.3.11579264"
-  CMAKE_VERSION: "3.22.1"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  ANDROID_NDK: "26.3.11579264"
+  ANDROID_CMAKE: "3.22.1"
+
+  ANDROID_SDK_PACKAGES: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;26.3.11579264 cmake;3.22.1"
 
 jobs:
   build:
@@ -46,83 +43,71 @@ jobs:
           repository: fluxerapp-old/fluxer
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: 10.26.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 20
           cache: pnpm
           cache-dependency-path: fluxer_app/pnpm-lock.yaml
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version: stable
           cache-dependency-path: fluxer_app/scripts/go.sum
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: 17
           cache: gradle
           cache-dependency-path: |
+            fluxer_app/android/gradle/wrapper/gradle-wrapper.properties
             fluxer_app/android/**/*.gradle*
-            fluxer_app/android/**/gradle-wrapper.properties
-            fluxer_app/android/gradle.properties
-            fluxer_app/android/settings.gradle*
-            fluxer_app/android/build.gradle*
+            fluxer_app/android/**/gradle.properties
 
-      - name: Set up Android SDK (platform/build-tools/NDK/CMake)
+      - name: Set up Android SDK (platforms, build-tools, NDK, CMake)
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platform-tools
-            platforms;${{ env.ANDROID_PLATFORM }}
-            build-tools;${{ env.BUILD_TOOLS }}
-            ndk;${{ env.NDK_VERSION }}
-            cmake;${{ env.CMAKE_VERSION }}
+          packages: ${{ env.ANDROID_SDK_PACKAGES }}
+          log-accepted-android-sdk-licenses: false
 
       - name: Install pnpm dependencies
         working-directory: fluxer_app
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: pnpm install --frozen-lockfile
 
-      - name: Set up Ruby (bundler)
+      - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: ${{ env.RUBY_VERSION }}
+          ruby-version: 3.2
           bundler-cache: true
           working-directory: fluxer_app
 
       - name: Decode Firebase config
         run: |
-          set -euo pipefail
-          mkdir -p fluxer_app/android/app
-          echo "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > fluxer_app/android/app/google-services.json
+          echo "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" | base64 -d > fluxer_app/android/app/google-services.json
 
       - name: Decode Android keystore
         run: |
-          set -euo pipefail
-          mkdir -p fluxer_app/android/app
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > fluxer_app/android/app/release.keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > fluxer_app/android/app/release.keystore
 
       - name: Clean native build caches
         working-directory: fluxer_app
         run: |
-          set -euo pipefail
           rm -rf \
-            android/.gradle \
-            android/.cxx \
             android/app/.cxx \
+            android/.cxx \
+            android/.gradle \
             android/app/build/generated/source/codegen \
-            node_modules/react-native-reanimated/android/.cxx \
-            node_modules/react-native-worklets/android/.cxx
+            node_modules/react-native-reanimated/android/.cxx
           echo "Cleaned native build caches"
 
       - name: Build Android APK and AAB
@@ -133,25 +118,21 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: bundle exec fastlane android android_build_canary
+        run: bundle exec fastlane android_build_canary
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fluxer-android-canary-apk
-          path: |
-            fluxer_app/build/android/**/*.apk
-            fluxer_app/android/app/build/outputs/**/*.apk
+          path: fluxer_app/build/android/*.apk
           retention-days: 30
           if-no-files-found: error
 
       - name: Upload AAB artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fluxer-android-canary-aab
-          path: |
-            fluxer_app/build/android/**/*.aab
-            fluxer_app/android/app/build/outputs/**/*.aab
+          path: fluxer_app/build/android/*.aab
           retention-days: 30
           if-no-files-found: error
 
@@ -162,12 +143,9 @@ jobs:
           rm -f fluxer_app/android/app/google-services.json
 
       - name: Build summary
-        if: always()
         run: |
           {
             echo "## Android Canary Build Complete"
-            echo ""
-            echo "**Source ref:** \`${{ env.SOURCE_REF }}\`"
             echo ""
             echo "**Artifacts:**"
             echo "- APK: \`fluxer-android-canary-apk\`"

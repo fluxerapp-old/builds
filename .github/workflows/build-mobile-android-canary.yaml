@@ -53,8 +53,9 @@ jobs:
       - name: Resolve runtime version
         id: runtime_version
         run: |
-          RUNTIME_VERSION=$(node -p "const pkg=require('./fluxer_app/package.json'); \`\${pkg.version}-\${process.env.CHANNEL}\`")
-          echo "runtime-version=${RUNTIME_VERSION}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          RUNTIME_VERSION=$(node -e 'const pkg=require("./fluxer_app/package.json"); const channel=process.env.CHANNEL || "canary"; process.stdout.write(`${pkg.version}-${channel}`);')
+          printf 'runtime-version=%s\n' "$RUNTIME_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         working-directory: fluxer_app
@@ -64,6 +65,7 @@ jobs:
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
         run: |
+          set -euo pipefail
           echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > fluxer_app/android/app/google-services.json
 
       - name: Set up Java 17
@@ -78,6 +80,7 @@ jobs:
 
       - name: Install NDK and CMake
         run: |
+          set -euo pipefail
           # Install specific NDK version required for React Native build
           sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
           # Install CMake for native builds
@@ -88,10 +91,11 @@ jobs:
 
       - name: Patch Gradle cache for std::format compatibility
         run: |
+          set -euo pipefail
           # React Native 0.81.5 uses std::format which is not available in Android NDK's libc++
           # The Gradle cache may contain prebuilt AAR with unpatched headers
           # This script patches any cached graphicsConversions.h files
-          find ~/.gradle/caches -name "graphicsConversions.h" -type f 2>/dev/null | while read file; do
+          find ~/.gradle/caches -name "graphicsConversions.h" -type f 2>/dev/null | while IFS= read -r file; do
             if grep -q 'std::format("{}%", dimension.value)' "$file" 2>/dev/null; then
               sed -i 's/return std::format("{}%", dimension.value);/return std::to_string(dimension.value) + "%";/' "$file"
               echo "Patched: $file"
@@ -103,6 +107,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > fluxer_app/android/app/release.keystore
 
       - name: Set up Ruby
@@ -129,6 +134,7 @@ jobs:
           # Disable Gradle configuration cache due to react-native-reanimated compatibility
           GRADLE_OPTS: '-Dorg.gradle.configuration-cache=false'
         run: |
+          set -euo pipefail
           bundle exec fastlane android_build_canary
 
       - name: Upload APK artifact
@@ -141,6 +147,7 @@ jobs:
       - name: Cleanup keystore and secrets
         if: always()
         run: |
+          set -euo pipefail
           rm -f fluxer_app/android/app/release.keystore
           rm -f fluxer_app/android/app/google-services.json
 
@@ -151,9 +158,10 @@ jobs:
     steps:
       - name: Summary
         run: |
-          echo "### Android Canary Build Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Build artifacts:" >> $GITHUB_STEP_SUMMARY
-          echo "- APK: Available in artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download APK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          echo "### Android Canary Build Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build artifacts:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- APK: Available in artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download APK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_STEP_SUMMARY"

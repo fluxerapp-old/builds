@@ -45,7 +45,8 @@ jobs:
       - name: Set filtered matrix
         id: set-matrix
         run: |
-          platforms='[
+          set -euo pipefail
+          PLATFORMS_JSON='[
             {"platform":"windows","arch":"x64","os":"windows-latest","electron_arch":"x64"},
             {"platform":"windows","arch":"arm64","os":"windows-11-arm","electron_arch":"arm64"},
             {"platform":"macos","arch":"x64","os":"macos-15-intel","electron_arch":"x64"},
@@ -58,7 +59,8 @@ jobs:
           SKIP_MACOS="${{ inputs.skip_macos }}"
           SKIP_LINUX="${{ inputs.skip_linux }}"
 
-          node -e "const platforms = ${platforms}; const skipWin = '${SKIP_WINDOWS}' === 'true'; const skipMac = '${SKIP_MACOS}' === 'true'; const skipLinux = '${SKIP_LINUX}' === 'true'; const filtered = platforms.filter(p => !(skipWin && p.platform==='windows') && !(skipMac && p.platform==='macos') && !(skipLinux && p.platform==='linux')); console.log('matrix=' + JSON.stringify({include: filtered}));" >> "$GITHUB_OUTPUT"
+          export PLATFORMS_JSON SKIP_WINDOWS SKIP_MACOS SKIP_LINUX
+          node -e 'const platforms = JSON.parse(process.env.PLATFORMS_JSON); const skipWin = process.env.SKIP_WINDOWS === "true"; const skipMac = process.env.SKIP_MACOS === "true"; const skipLinux = process.env.SKIP_LINUX === "true"; const filtered = platforms.filter(p => !(skipWin && p.platform === "windows") && !(skipMac && p.platform === "macos") && !(skipLinux && p.platform === "linux")); process.stdout.write(`matrix=${JSON.stringify({include: filtered})}\\n`);' >> "$GITHUB_OUTPUT"
 
   version:
     name: Bump Stable Version
@@ -75,6 +77,7 @@ jobs:
       - name: Calculate and push next tag
         id: bump
         run: |
+          set -euo pipefail
           TAG_PREFIX="desktop-stable-v"
           TAG_GLOB="desktop-stable-v0.0.*"
 
@@ -91,8 +94,8 @@ jobs:
           TAG_NAME="${TAG_PREFIX}${VERSION}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "pub_date=${PUB_DATE}" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'pub_date=%s\n' "$PUB_DATE" >> "$GITHUB_OUTPUT"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -163,13 +166,14 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
           sudo gem install --no-document fpm
 
       - name: Update version in package.json
         working-directory: fluxer_app
-        run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
+        run: pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build Electron main process
         working-directory: fluxer_app
@@ -207,6 +211,7 @@ jobs:
       - name: Prepare artifacts
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p upload_staging
           if [ -d "fluxer_app/dist-electron" ]; then
             cp -r fluxer_app/dist-electron/* upload_staging/ || true
@@ -270,6 +275,7 @@ jobs:
       - name: Flatten artifact directories for uploader
         shell: bash
         run: |
+          set -euo pipefail
           shopt -s nullglob dotglob
           for dir in artifacts/fluxer-desktop-${CHANNEL}-*; do
             if [ -d "$dir/upload_staging" ]; then
@@ -287,4 +293,5 @@ jobs:
       - name: Upload all builds to S3
         working-directory: fluxer_app/scripts/cmd/desktopci
         run: |
-          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint ${AWS_S3_ENDPOINT} --bucket ${AWS_S3_BUCKET} --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+          set -euo pipefail
+          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint "${AWS_S3_ENDPOINT}" --bucket "${AWS_S3_BUCKET}" --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"

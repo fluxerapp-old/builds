@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to build (branch, tag, or commit SHA)'
+        description: Git ref to build (branch, tag, or commit SHA)
         required: false
-        default: 'canary'
+        default: canary
         type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-mobile-ios-canary-${{ inputs.ref || 'canary' }}
+  group: ios-canary-${{ inputs.ref || 'canary' }}
   cancel-in-progress: true
 
 env:
@@ -26,7 +26,7 @@ jobs:
     name: Build iOS App (Canary)
     runs-on: macos-15
     steps:
-      - name: Checkout private repository
+      - name: Checkout source repository
         uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
@@ -45,101 +45,93 @@ jobs:
           cache: pnpm
           cache-dependency-path: fluxer_app/pnpm-lock.yaml
 
-      - name: Determine runtime version
-        id: runtime-version
-        run: |
-          RUNTIME_VERSION=$(node -p 'const pkg=require("./fluxer_app/package.json"); console.log(`${pkg.version}-${process.env.CHANNEL}`);')
-          echo "runtime-version=$RUNTIME_VERSION" >> $GITHUB_OUTPUT
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: fluxer_app/scripts/go.sum
 
-      - name: Export runtime environment
-        run: |
-          echo "FLUXER_RUNTIME_VERSION=${{ steps.runtime-version.outputs.runtime-version }}" >> $GITHUB_ENV
-          echo "FLUXER_RUNTIME_VERSION_OVERRIDE=${{ steps.runtime-version.outputs.runtime-version }}" >> $GITHUB_ENV
-
-      - name: Install dependencies
+      - name: Install pnpm dependencies
         working-directory: fluxer_app
         run: pnpm install --frozen-lockfile
-
-      - name: Decode and install Firebase config
-        env:
-          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
-        run: |
-          set -euo pipefail
-          echo "$GOOGLE_SERVICE_INFO_PLIST_BASE64" | base64 --decode > fluxer_app/ios/fluxer_app/GoogleService-Info.plist
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2'
-          bundler-cache: true # runs bundle install and caches gems
-          working-directory: fluxer_app/ios
+          ruby-version: 3.2
+          bundler-cache: true
+          working-directory: fluxer_app
 
-      - name: Setup iOS signing
+      - name: Decode Firebase config
+        run: |
+          echo "${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}" | base64 -d > fluxer_app/ios/fluxer_app/GoogleService-Info.plist
+
+      - name: Set up iOS signing
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_CANARY_BASE64 }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          set -euo pipefail
-          # Create keychain
+          # Create temporary keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -t 3600 -u build.keychain
 
           # Import certificate
-          echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          echo "$IOS_CERTIFICATE_BASE64" | base64 -d > certificate.p12
           security import certificate.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
 
           # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/canary.mobileprovision
-
-          # Cleanup
-          rm certificate.p12
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -d > ~/Library/MobileDevice/Provisioning\ Profiles/canary.mobileprovision
 
       - name: Install CocoaPods dependencies
         working-directory: fluxer_app/ios
-        run: |
-          set -euo pipefail
-          pod install
+        run: pod install
 
       - name: Build iOS app
-        working-directory: fluxer_app/ios
+        working-directory: fluxer_app
         env:
-          FASTLANE_APPLE_ID: ${{ secrets.APPLE_ID }}
-          FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          FASTLANE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_CHANNEL: canary
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        run: |
-          set -euo pipefail
-          bundle exec fastlane ios beta
+          FASTLANE_APPLE_ID: ${{ secrets.APPLE_ID }}
+          FASTLANE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bundle exec fastlane ios_build_canary
 
       - name: Upload to TestFlight
-        working-directory: fluxer_app/ios
+        working-directory: fluxer_app
         env:
-          FASTLANE_APPLE_ID: ${{ secrets.APPLE_ID }}
-          FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          FASTLANE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
-        run: |
-          set -euo pipefail
-          bundle exec fastlane ios upload_testflight
+        run: bundle exec fastlane ios_beta
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
-          name: fluxer-ios-${{ env.CHANNEL }}
-          path: fluxer_app/ios/*.ipa
+          name: fluxer-ios-canary
+          path: fluxer_app/build/ios/*.ipa
           retention-days: 30
+          if-no-files-found: warn
 
-      - name: Cleanup keychain and secrets
+      - name: Cleanup secrets
         if: always()
         run: |
-          set -euo pipefail
           security delete-keychain build.keychain || true
           rm -f fluxer_app/ios/fluxer_app/GoogleService-Info.plist
+
+      - name: Build summary
+        run: |
+          {
+            echo "## iOS Canary Build Complete"
+            echo ""
+            echo "**Artifacts:**"
+            echo "- IPA: \`fluxer-ios-canary\`"
+            echo "- TestFlight: Build uploaded"
+            echo ""
+            echo "[Download artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"

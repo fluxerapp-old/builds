@@ -4,22 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to build (branch, tag, or commit SHA)'
+        description: Git ref to build (branch, tag, or commit SHA)
         required: false
-        default: 'canary'
+        default: canary
         type: string
       skip_windows:
-        description: 'Skip Windows builds'
+        description: Skip Windows builds
         required: false
         default: false
         type: boolean
       skip_macos:
-        description: 'Skip macOS builds'
+        description: Skip macOS builds
         required: false
         default: false
         type: boolean
       skip_linux:
-        description: 'Skip Linux builds'
+        description: Skip Linux builds
         required: false
         default: false
         type: boolean
@@ -28,7 +28,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-desktop-canary-${{ inputs.ref || 'canary' }}
+  group: desktop-canary-${{ inputs.ref || 'canary' }}
   cancel-in-progress: true
 
 env:
@@ -37,16 +37,15 @@ env:
 
 jobs:
   matrix:
-    name: Resolve platforms to build
+    name: Resolve build matrix
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Set filtered matrix
+      - name: Build platform matrix
         id: set-matrix
         run: |
-          set -euo pipefail
-          PLATFORMS_JSON='[
+          PLATFORMS='[
             {"platform":"windows","arch":"x64","os":"windows-latest","electron_arch":"x64"},
             {"platform":"windows","arch":"arm64","os":"windows-11-arm","electron_arch":"arm64"},
             {"platform":"macos","arch":"x64","os":"macos-15-intel","electron_arch":"x64"},
@@ -55,15 +54,19 @@ jobs:
             {"platform":"linux","arch":"arm64","os":"ubuntu-24.04-arm","electron_arch":"arm64"}
           ]'
 
-          SKIP_WINDOWS="${{ inputs.skip_windows }}"
-          SKIP_MACOS="${{ inputs.skip_macos }}"
-          SKIP_LINUX="${{ inputs.skip_linux }}"
+          FILTERED=$(echo "$PLATFORMS" | jq -c --argjson skipWin "${{ inputs.skip_windows }}" --argjson skipMac "${{ inputs.skip_macos }}" --argjson skipLinux "${{ inputs.skip_linux }}" '
+            [.[] | select(
+              ((.platform == "windows") and $skipWin) or
+              ((.platform == "macos") and $skipMac) or
+              ((.platform == "linux") and $skipLinux)
+              | not
+            )]
+          ')
 
-          export PLATFORMS_JSON SKIP_WINDOWS SKIP_MACOS SKIP_LINUX
-          node -e 'const platforms = JSON.parse(process.env.PLATFORMS_JSON); const skipWin = process.env.SKIP_WINDOWS === "true"; const skipMac = process.env.SKIP_MACOS === "true"; const skipLinux = process.env.SKIP_LINUX === "true"; const filtered = platforms.filter(p => !(skipWin && p.platform === "windows") && !(skipMac && p.platform === "macos") && !(skipLinux && p.platform === "linux")); process.stdout.write(`matrix=${JSON.stringify({include: filtered})}\\n`);' >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
 
   version:
-    name: Bump Canary Version
+    name: Bump canary version
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.bump.outputs.version }}
@@ -74,51 +77,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Calculate and push next tag
+      - name: Calculate next version
         id: bump
         run: |
-          set -euo pipefail
           TAG_PREFIX="desktop-canary-v"
-          TAG_GLOB="desktop-canary-v0.0.*"
-
           git fetch --tags --force
 
-          LATEST=$(git tag -l "$TAG_GLOB" --sort=-v:refname | head -n1)
+          LATEST=$(git tag -l "${TAG_PREFIX}0.0.*" --sort=-v:refname | head -n1)
           NUM=0
           if [ -n "$LATEST" ]; then
-            NUM=$(echo "$LATEST" | sed "s/${TAG_PREFIX}//" | cut -d. -f3)
+            NUM=$(echo "$LATEST" | sed "s/${TAG_PREFIX}0.0.//" | cut -d. -f1)
           fi
           NUM=$((NUM + 1))
 
           VERSION="0.0.${NUM}"
-          TAG_NAME="${TAG_PREFIX}${VERSION}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
-          printf 'pub_date=%s\n' "$PUB_DATE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "pub_date=$PUB_DATE" >> "$GITHUB_OUTPUT"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Tag $TAG_NAME already exists; skipping push"
-          else
+          TAG_NAME="${TAG_PREFIX}${VERSION}"
+          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             git tag "$TAG_NAME"
             git push origin "$TAG_NAME"
           fi
 
-          echo "Created tag: $TAG_NAME (version: $VERSION)"
+          echo "Created tag: $TAG_NAME"
 
   build:
-    name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
+    name: Build ${{ matrix.platform }} (${{ matrix.arch }})
     needs: [version, matrix]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
-
     steps:
-      - name: Checkout private repository (Unix)
+      - name: Checkout source (Unix)
         if: runner.os != 'Windows'
         uses: actions/checkout@v6
         with:
@@ -126,7 +123,7 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Checkout private repository (Windows)
+      - name: Checkout source (Windows)
         if: runner.os == 'Windows'
         uses: actions/checkout@v6
         with:
@@ -146,39 +143,47 @@ jobs:
           cache: pnpm
           cache-dependency-path: fluxer_app/pnpm-lock.yaml
 
-      - name: Install Python distutils shim (Windows ARM64)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: fluxer_app/scripts/go.sum
+
+      - name: Install Python setuptools (Windows ARM64)
         if: matrix.platform == 'windows' && matrix.arch == 'arm64'
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install "setuptools>=69" wheel
 
-      - name: Install dependencies
-        working-directory: fluxer_app
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Python setuptools (for node-gyp)
+      - name: Install Python setuptools (macOS)
         if: matrix.platform == 'macos'
         run: brew install python-setuptools
 
-      - name: Install Linux build dependencies (X11 + fpm)
+      - name: Install Linux dependencies
         if: matrix.platform == 'linux'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev ruby ruby-dev build-essential rpm libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+          sudo apt-get install -y \
+            libx11-dev libxtst-dev libxt-dev libxinerama-dev libxkbcommon-dev libxrandr-dev \
+            ruby ruby-dev build-essential rpm \
+            libpixman-1-dev libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
           sudo gem install --no-document fpm
 
-      - name: Update version in package.json
+      - name: Install dependencies
+        working-directory: fluxer_app
+        run: pnpm install --frozen-lockfile
+
+      - name: Update version
         working-directory: fluxer_app
         run: pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build Electron main process
         working-directory: fluxer_app
         env:
-          BUILD_CHANNEL: ${{ env.CHANNEL }}
+          BUILD_CHANNEL: canary
         run: pnpm electron:compile
 
       - name: Build Electron app (macOS)
@@ -211,32 +216,22 @@ jobs:
       - name: Prepare artifacts
         shell: bash
         run: |
-          set -euo pipefail
           mkdir -p upload_staging
-          if [ -d "fluxer_app/dist-electron" ]; then
-            cp -r fluxer_app/dist-electron/* upload_staging/ || true
-          fi
+          [ -d "fluxer_app/dist-electron" ] && cp -r fluxer_app/dist-electron/* upload_staging/ || true
           ls -la upload_staging/
 
-      - name: Normalize updater YAML names (arm64)
+      - name: Normalize updater YAML (arm64)
         if: matrix.arch == 'arm64'
         shell: bash
         run: |
-          set -euo pipefail
           cd upload_staging
-
-          if [[ "${{ matrix.platform }}" == "macos" ]]; then
-            [[ -f latest-mac.yml && ! -f latest-mac-arm64.yml ]] && mv latest-mac.yml latest-mac-arm64.yml
-          fi
-
-          if [[ "${{ matrix.platform }}" == "windows" ]]; then
-            [[ -f latest.yml && ! -f latest-arm64.yml ]] && mv latest.yml latest-arm64.yml
-          fi
+          [[ "${{ matrix.platform }}" == "macos" && -f latest-mac.yml && ! -f latest-mac-arm64.yml ]] && mv latest-mac.yml latest-mac-arm64.yml || true
+          [[ "${{ matrix.platform }}" == "windows" && -f latest.yml && ! -f latest-arm64.yml ]] && mv latest.yml latest-arm64.yml || true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
-          name: fluxer-desktop-${{ env.CHANNEL }}-${{ matrix.platform }}-${{ matrix.arch }}
+          name: fluxer-desktop-canary-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             upload_staging/*.exe
             upload_staging/*.exe.blockmap
@@ -250,7 +245,7 @@ jobs:
           retention-days: 30
 
   upload:
-    name: Upload builds to S3
+    name: Upload to S3
     needs: [version, build]
     runs-on: ubuntu-24.04
     env:
@@ -260,7 +255,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1
     steps:
-      - name: Checkout private repository
+      - name: Checkout source repository
         uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
@@ -268,30 +263,34 @@ jobs:
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Flatten artifact directories for uploader
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob dotglob
-          for dir in artifacts/fluxer-desktop-${CHANNEL}-*; do
-            if [ -d "$dir/upload_staging" ]; then
-              mv "$dir"/upload_staging/* "$dir"/
-              rmdir "$dir/upload_staging" || true
-            fi
-          done
-          shopt -u nullglob dotglob
+          pattern: fluxer-desktop-canary-*
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: stable
+          cache-dependency-path: fluxer_app/scripts/go.sum
 
-      - name: Upload all builds to S3
+      - name: Upload to S3
         working-directory: fluxer_app/scripts/cmd/desktopci
         run: |
-          set -euo pipefail
-          go run . upload --channel "${CHANNEL}" --artifacts "${{ github.workspace }}/artifacts" --endpoint "${AWS_S3_ENDPOINT}" --bucket "${AWS_S3_BUCKET}" --version "${{ needs.version.outputs.version }}" --pub-date "${{ needs.version.outputs.pub_date }}"
+          go run . upload \
+            --channel "canary" \
+            --artifacts "${{ github.workspace }}/artifacts" \
+            --endpoint "$AWS_S3_ENDPOINT" \
+            --bucket "$AWS_S3_BUCKET" \
+            --version "${{ needs.version.outputs.version }}" \
+            --pub-date "${{ needs.version.outputs.pub_date }}"
+
+      - name: Build summary
+        run: |
+          {
+            echo "## Desktop Canary Build Complete"
+            echo ""
+            echo "**Version:** ${{ needs.version.outputs.version }}"
+            echo ""
+            echo "[Download artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } >> "$GITHUB_STEP_SUMMARY"

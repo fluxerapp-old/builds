@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       AWS_S3_ENDPOINT: https://s3.us-east-va.io.cloud.ovh.us
-      AWS_S3_BUCKET: fluxer-dl
+      AWS_S3_BUCKET: fluxer-downloads
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-east-1

@@ -115,7 +115,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     env:
-      # Default for macOS/Linux; Windows will override to a subst drive.
       APP_WORKDIR: fluxer_app
     steps:
       - name: Checkout source (Unix)
@@ -151,12 +150,14 @@ jobs:
           "SQUIRREL_TEMP=C:\sq"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # IMPORTANT: setup-node caches pnpm's global store dir. If it points to the subst drive,
-          # setup-node's post step may fail to validate the path. Pin it to a stable real path.
+          # Pin pnpm store to a stable real path (avoid subst drive issues + post-job cache validation)
           New-Item -ItemType Directory -Force "C:\pnpm-store" | Out-Null
-          Set-Content -Path "$env:GITHUB_WORKSPACE\.npmrc" -Value "store-dir=C:\pnpm-store" -Encoding ascii
+          "NPM_CONFIG_STORE_DIR=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "npm_config_store_dir=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # Helpful for other tooling (safe to keep)
+          # Also write .npmrc where pnpm will find it when running in W:\fluxer_app
+          "store-dir=C:\pnpm-store" | Set-Content -Path "W:\.npmrc" -Encoding ascii
+
           git config --global core.longpaths true
 
       - name: Set up pnpm
@@ -168,10 +169,30 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: pnpm
-          # Avoid the "paths were not resolved" class of failures by globbing.
-          cache-dependency-path: |
-            **/pnpm-lock.yaml
+
+      - name: Resolve pnpm store path (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $store = pnpm store path --silent
+          "PNPM_STORE_PATH=$store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -ItemType Directory -Force $store | Out-Null
+
+      - name: Resolve pnpm store path (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          store="$(pnpm store path --silent)"
+          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
+          mkdir -p "$store"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -247,7 +268,6 @@ jobs:
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}
 
-      # Stage only the publishable artifacts into upload_staging (so your upload globs match).
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

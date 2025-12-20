@@ -115,7 +115,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     env:
-      # Default; Windows will override this to a subst drive for shorter paths.
+      # Default for macOS/Linux; Windows will override to a subst drive.
       APP_WORKDIR: fluxer_app
     steps:
       - name: Checkout source (Unix)
@@ -134,24 +134,30 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
-      - name: Shorten Windows paths (workspace + temp for Squirrel)
+      - name: Shorten Windows paths (workspace + temp for Squirrel) and pin pnpm store
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Subst the workspace to a short drive letter (reduces path length in build outputs)
+          # Short workspace path
           subst W: "$env:GITHUB_WORKSPACE"
           "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # Force very short temp roots to avoid Squirrel/NuGet MAX_PATH failures.
-          New-Item -ItemType Directory -Force "C:\t"  | Out-Null
-          New-Item -ItemType Directory -Force "C:\sq" | Out-Null
-          "TEMP=C:\t"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "TMP=C:\t"         | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "SQUIRREL_TEMP=C:\sq" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          # Optional but helpful: shorten electron-builder's cache root too.
-          New-Item -ItemType Directory -Force "C:\ebcache" | Out-Null
+          # Short temp roots (Squirrel + friends)
+          New-Item -ItemType Directory -Force "C:\t"        | Out-Null
+          New-Item -ItemType Directory -Force "C:\sq"       | Out-Null
+          New-Item -ItemType Directory -Force "C:\ebcache"  | Out-Null
+          "TEMP=C:\t"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:\t"                | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SQUIRREL_TEMP=C:\sq"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # IMPORTANT: setup-node caches pnpm's global store dir. If it points to the subst drive,
+          # setup-node's post step may fail to validate the path. Pin it to a stable real path.
+          New-Item -ItemType Directory -Force "C:\pnpm-store" | Out-Null
+          Set-Content -Path "$env:GITHUB_WORKSPACE\.npmrc" -Value "store-dir=C:\pnpm-store" -Encoding ascii
+
+          # Helpful for other tooling (safe to keep)
+          git config --global core.longpaths true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -163,7 +169,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-          # Wildcard avoids "Some specified paths were not resolved" when lockfile is in a subfolder.
+          # Avoid the "paths were not resolved" class of failures by globbing.
           cache-dependency-path: |
             **/pnpm-lock.yaml
 
@@ -227,7 +233,6 @@ jobs:
         working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
-          # Keep these here too so they’re definitely present during the electron-builder step.
           TEMP: C:\t
           TMP: C:\t
           SQUIRREL_TEMP: C:\sq
@@ -242,11 +247,50 @@ jobs:
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}
 
-      - name: Prepare artifacts
+      # Stage only the publishable artifacts into upload_staging (so your upload globs match).
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force upload_staging | Out-Null
+
+          $dist = Join-Path $env:APP_WORKDIR "dist-electron"
+          $sq = Join-Path $dist "squirrel-windows"
+
+          if (Test-Path $sq) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe.blockmap" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\RELEASES*" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg.blockmap" "upload_staging\"
+          }
+
+          if (Test-Path $dist) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.yml" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip.blockmap" "upload_staging\"
+          }
+
+          Get-ChildItem -Force upload_staging | Format-Table -AutoSize
+
+      - name: Prepare artifacts (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p upload_staging
-          [ -d "fluxer_app/dist-electron" ] && cp -r fluxer_app/dist-electron/* upload_staging/ || true
+          DIST="${{ env.APP_WORKDIR }}/dist-electron"
+
+          # macOS
+          cp -f "$DIST"/*.dmg upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.zip upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.zip.blockmap upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.yml upload_staging/ 2>/dev/null || true
+
+          # Linux
+          cp -f "$DIST"/*.AppImage upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.deb upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.tar.gz upload_staging/ 2>/dev/null || true
+
           ls -la upload_staging/
 
       - name: Normalize updater YAML (arm64)

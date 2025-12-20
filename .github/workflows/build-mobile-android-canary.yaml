@@ -75,7 +75,7 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null
+          (yes || true) | sdkmanager --licenses >/dev/null
 
           sdkmanager --install \
             "platform-tools" \

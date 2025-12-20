@@ -114,6 +114,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    env:
+      # Defaults for macOS/Linux (Windows overrides these to a subst drive)
+      APP_WORKDIR: fluxer_app
+      PNPM_LOCK_PATH: fluxer_app/pnpm-lock.yaml
+      GO_SUM_PATH: fluxer_app/scripts/go.sum
     steps:
       - name: Checkout source (Unix)
         if: runner.os != 'Windows'
@@ -131,6 +136,25 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
+      # Critical: shorten absolute paths to avoid NuGet/Squirrel MAX_PATH failures
+      - name: Shorten paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          subst W: $env:GITHUB_WORKSPACE
+
+          "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PNPM_LOCK_PATH=W:\fluxer_app\pnpm-lock.yaml" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "GO_SUM_PATH=W:\fluxer_app\scripts\go.sum" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          git config --global core.longpaths true
+          New-ItemProperty `
+            -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name LongPathsEnabled `
+            -Value 1 `
+            -PropertyType DWord `
+            -Force | Out-Null
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -141,13 +165,13 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-          cache-dependency-path: fluxer_app/pnpm-lock.yaml
+          cache-dependency-path: ${{ env.PNPM_LOCK_PATH }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache-dependency-path: fluxer_app/scripts/go.sum
+          cache-dependency-path: ${{ env.GO_SUM_PATH }}
 
       - name: Install Python setuptools (Windows ARM64)
         if: matrix.platform == 'windows' && matrix.arch == 'arm64'
@@ -173,22 +197,22 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Install dependencies
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         run: pnpm install --frozen-lockfile
 
       - name: Update version
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         run: pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build Electron main process
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
         run: pnpm electron:compile
 
       - name: Build Electron app (macOS)
         if: matrix.platform == 'macos'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
@@ -200,14 +224,14 @@ jobs:
 
       - name: Build Electron app (Windows)
         if: matrix.platform == 'windows'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --win --${{ matrix.electron_arch }}
 
       - name: Build Electron app (Linux)
         if: matrix.platform == 'linux'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
           USE_SYSTEM_FPM: true

@@ -242,6 +242,9 @@ jobs:
             upload_staging/*.deb
             upload_staging/*.tar.gz
             upload_staging/*.yml
+            upload_staging/*.nupkg
+            upload_staging/*.nupkg.blockmap
+            upload_staging/RELEASES*
           retention-days: 30
 
   upload:

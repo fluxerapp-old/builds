@@ -23,12 +23,20 @@ env:
 jobs:
   build:
     name: Build Android APK (Canary)
-    runs-on: [self-hosted, linux, hetzner]
+    runs-on: [self-hosted, linux, nas]
 
     defaults:
       run:
         shell: bash
         working-directory: fluxer_app
+
+    # CI-focused overrides to reduce disk usage and avoid config-cache writes.
+    env:
+      # Build only device ABIs to significantly reduce intermediates + AAR/APK size.
+      ORG_GRADLE_PROJECT_reactNativeArchitectures: armeabi-v7a,arm64-v8a
+
+      # Avoid writing/storing Gradle configuration cache in CI (saves disk, avoids compat issues).
+      GRADLE_OPTS: -Dorg.gradle.configuration-cache=false
 
     steps:
       - name: Checkout source repository
@@ -38,6 +46,50 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
           fetch-depth: 0
+
+      - name: Preflight disk usage
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          echo "== df -h =="
+          df -h
+          echo ""
+          echo "== Top-level sizes (workspace + home) =="
+          du -h -d 2 "$GITHUB_WORKSPACE" 2>/dev/null | sort -h | tail -n 40 || true
+          du -h -d 2 "$HOME" 2>/dev/null | sort -h | tail -n 40 || true
+
+      - name: Prune caches if disk is tight
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+
+          # Threshold: if less than 20 GB free on the workspace filesystem, prune aggressively.
+          AVAIL_GB="$(df --output=avail -BG "$GITHUB_WORKSPACE" | tail -n 1 | tr -dc '0-9' || echo 0)"
+          echo "Available space on workspace filesystem: ${AVAIL_GB} GB"
+
+          if [ "${AVAIL_GB}" -lt 20 ]; then
+            echo "Low disk space detected (<20GB). Pruning caches..."
+
+            # Gradle caches can explode (transforms, configuration-cache, etc.)
+            rm -rf "$HOME/.gradle/configuration-cache" || true
+            rm -rf "$HOME/.gradle/caches" || true
+            rm -rf "$HOME/.gradle/daemon" || true
+
+            # pnpm store can grow indefinitely on self-hosted; prune it if present.
+            if command -v pnpm >/dev/null 2>&1; then
+              pnpm store prune || true
+            fi
+
+            # Android build artifacts in the repo
+            rm -rf "$GITHUB_WORKSPACE/fluxer_app/android/app/build" || true
+            rm -rf "$GITHUB_WORKSPACE/fluxer_app/android/build" || true
+          else
+            echo "Disk space OK; skipping aggressive prune."
+          fi
+
+          echo ""
+          echo "== df -h after prune step =="
+          df -h
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -62,27 +114,38 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            fluxer_app/android/gradle/wrapper/gradle-wrapper.properties
-            fluxer_app/android/**/*.gradle*
-            fluxer_app/android/**/gradle.properties
+          # On self-hosted, prefer managing disk yourself rather than restoring huge Gradle caches.
+          # (Leaving this unset avoids GitHub cache restore/save churn.)
+          # cache: gradle
 
       - name: Set up Android SDK (cmdline-tools + licenses)
         uses: android-actions/setup-android@v3
         with:
           packages: ""
 
-      - name: Install Android SDK packages
+      - name: Ensure Android SDK packages (idempotent)
+        working-directory: ${{ github.workspace }}
         run: |
+          set -euo pipefail
+
           (yes || true) | sdkmanager --licenses >/dev/null
 
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;26.3.11579264" \
-            "cmake;3.22.1"
+          need() { [ ! -d "$ANDROID_SDK_ROOT/$1" ]; }
+
+          PKGS=()
+          need "platform-tools" && PKGS+=("platform-tools")
+          need "platforms/android-35" && PKGS+=("platforms;android-35")
+          need "build-tools/35.0.0" && PKGS+=("build-tools;35.0.0")
+          need "ndk/26.3.11579264" && PKGS+=("ndk;26.3.11579264")
+          need "cmake/3.22.1" && PKGS+=("cmake;3.22.1")
+
+          if [ "${#PKGS[@]}" -gt 0 ]; then
+            echo "Installing missing SDK packages:"
+            printf ' - %s\n' "${PKGS[@]}"
+            sdkmanager --install "${PKGS[@]}"
+          else
+            echo "All required Android SDK packages already present."
+          fi
 
       - name: Install pnpm dependencies
         run: pnpm install --frozen-lockfile
@@ -108,6 +171,14 @@ jobs:
         run: |
           rm -rf android/app/.cxx android/.gradle android/app/build/generated/source/codegen
           echo "Cleaned native build caches"
+
+      - name: Disk usage before build
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          df -h
+          du -h -d 2 "$GITHUB_WORKSPACE/fluxer_app/android" 2>/dev/null | sort -h | tail -n 40 || true
+          du -h -d 2 "$HOME/.gradle" 2>/dev/null | sort -h | tail -n 40 || true
 
       - name: Build Android APK and AAB
         env:
@@ -149,6 +220,7 @@ jobs:
           {
             echo "## Android Canary Build Complete"
             echo ""
+            echo "**Runner:** \`${{ runner.name }}\`"
             echo "**Artifacts:**"
             echo "- APK: \`fluxer-android-canary-apk\`"
             echo "- AAB: \`fluxer-android-canary-aab\`"

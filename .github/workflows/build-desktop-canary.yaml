@@ -115,6 +115,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     env:
+      # Default; Windows will override this to a subst drive for shorter paths.
       APP_WORKDIR: fluxer_app
     steps:
       - name: Checkout source (Unix)
@@ -133,26 +134,24 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
-      - name: Shorten paths (Windows)
+      - name: Shorten Windows paths (workspace + temp for Squirrel)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          subst W: $env:GITHUB_WORKSPACE
-          "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # Subst the workspace to a short drive letter (reduces path length in build outputs)
+          subst W: "$env:GITHUB_WORKSPACE"
+          "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          git config --global core.longpaths true
+          # Force very short temp roots to avoid Squirrel/NuGet MAX_PATH failures.
+          New-Item -ItemType Directory -Force "C:\t"  | Out-Null
+          New-Item -ItemType Directory -Force "C:\sq" | Out-Null
+          "TEMP=C:\t"        | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:\t"         | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SQUIRREL_TEMP=C:\sq" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # LongPathsEnabled may already be on; do not fail the build if this can't be set.
-          try {
-            New-ItemProperty `
-              -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
-              -Name LongPathsEnabled `
-              -Value 1 `
-              -PropertyType DWord `
-              -Force | Out-Null
-          } catch {
-            Write-Host "Could not set LongPathsEnabled (continuing): $($_.Exception.Message)"
-          }
+          # Optional but helpful: shorten electron-builder's cache root too.
+          New-Item -ItemType Directory -Force "C:\ebcache" | Out-Null
+          "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -164,6 +163,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+          # Wildcard avoids "Some specified paths were not resolved" when lockfile is in a subfolder.
           cache-dependency-path: |
             **/pnpm-lock.yaml
 
@@ -227,6 +227,11 @@ jobs:
         working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
+          # Keep these here too so they’re definitely present during the electron-builder step.
+          TEMP: C:\t
+          TMP: C:\t
+          SQUIRREL_TEMP: C:\sq
+          ELECTRON_BUILDER_CACHE: C:\ebcache
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --win --${{ matrix.electron_arch }}
 
       - name: Build Electron app (Linux)

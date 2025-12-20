@@ -23,7 +23,7 @@ env:
 jobs:
   build:
     name: Build Android APK (Canary)
-    runs-on: [self-hosted, linux, nas]
+    runs-on: [self-hosted, linux, x64, pc]
 
     defaults:
       run:

@@ -114,9 +114,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          # On self-hosted, prefer managing disk yourself rather than restoring huge Gradle caches.
-          # (Leaving this unset avoids GitHub cache restore/save churn.)
-          # cache: gradle
 
       - name: Set up Android SDK (cmdline-tools + licenses)
         uses: android-actions/setup-android@v3
@@ -149,6 +146,17 @@ jobs:
 
       - name: Install pnpm dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install system deps for Ruby (libyaml)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if ldconfig -p 2>/dev/null | grep -q 'libyaml-0\.so\.2'; then
+            echo "libyaml already present"
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libyaml-0-2
 
       - name: Set up Ruby (Bundler cache)
         uses: ruby/setup-ruby@v1

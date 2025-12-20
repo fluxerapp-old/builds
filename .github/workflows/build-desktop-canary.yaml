@@ -115,7 +115,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     env:
-      # Default for macOS/Linux. Windows overrides after subst.
       APP_WORKDIR: fluxer_app
     steps:
       - name: Checkout source (Unix)
@@ -151,11 +150,13 @@ jobs:
           "SQUIRREL_TEMP=C:\sq"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # Pin pnpm store to stable path (avoid subst-drive weirdness + cache validation issues)
+          # Pin pnpm store to a stable real path (avoid subst drive issues + post-job cache validation)
           New-Item -ItemType Directory -Force "C:\pnpm-store" | Out-Null
           "NPM_CONFIG_STORE_DIR=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "npm_config_store_dir=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "store-dir=C:\pnpm-store" | Set-Content -Path "W:\fluxer_app\.npmrc" -Encoding ascii
+
+          # Also write .npmrc where pnpm will find it when running in W:\fluxer_app
+          "store-dir=C:\pnpm-store" | Set-Content -Path "W:\.npmrc" -Encoding ascii
 
           git config --global core.longpaths true
 
@@ -164,7 +165,6 @@ jobs:
         with:
           version: 10.26.0
 
-      # IMPORTANT: do NOT enable setup-node's pnpm caching (it is what triggers the post-job Path Validation Error)
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
@@ -268,86 +268,27 @@ jobs:
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}
 
-      # Key change: for Windows Squirrel we stage the actual installer + RELEASES + nupkg,
-      # and we generate latest.yml/latest-arm64.yml so desktopci upload can discover the build.
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          APP_VERSION: ${{ needs.version.outputs.version }}
-          APP_PUB_DATE: ${{ needs.version.outputs.pub_date }}
-          MATRIX_ARCH: ${{ matrix.arch }}
         run: |
           New-Item -ItemType Directory -Force upload_staging | Out-Null
 
           $dist = Join-Path $env:APP_WORKDIR "dist-electron"
           $sq = Join-Path $dist "squirrel-windows"
 
-          if (!(Test-Path $sq)) {
-            throw "Expected Squirrel output dir not found: $sq"
+          if (Test-Path $sq) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe.blockmap" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\RELEASES*" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg.blockmap" "upload_staging\"
           }
 
-          # Copy Squirrel outputs to the artifact root
-          Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe.blockmap" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$sq\RELEASES*" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg.blockmap" "upload_staging\"
-
-          # Also copy any YAML/ZIP artifacts from dist-electron if present
-          Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.yml" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip" "upload_staging\"
-          Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip.blockmap" "upload_staging\"
-
-          # Generate updater YAML expected by desktopci (latest.yml / latest-arm64.yml) if electron-builder didn't produce it
-          $arch = $env:MATRIX_ARCH
-          $manifestName = if ($arch -eq "arm64") { "latest-arm64.yml" } else { "latest.yml" }
-          $manifestPath = Join-Path "upload_staging" $manifestName
-
-          if (!(Test-Path $manifestPath)) {
-            $installer =
-              Get-ChildItem "upload_staging" -File -Filter "fluxer-*-$arch*.exe" -ErrorAction SilentlyContinue |
-              Sort-Object Length -Descending |
-              Select-Object -First 1
-
-            if (-not $installer) {
-              $installer =
-                Get-ChildItem "upload_staging" -File -Filter "*.exe" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -notmatch 'Squirrel|StubExecutable' } |
-                Sort-Object Length -Descending |
-                Select-Object -First 1
-            }
-
-            if (-not $installer) {
-              throw "Could not find installer exe in upload_staging to build $manifestName"
-            }
-
-            # Compute sha512 base64 (streaming, no huge memory use)
-            $sha = [System.Security.Cryptography.SHA512]::Create()
-            $fs = [System.IO.File]::OpenRead($installer.FullName)
-            try {
-              $hashBytes = $sha.ComputeHash($fs)
-            } finally {
-              $fs.Dispose()
-              $sha.Dispose()
-            }
-            $shaB64 = [Convert]::ToBase64String($hashBytes)
-            $size = (Get-Item $installer.FullName).Length
-            $exeName = $installer.Name
-
-            $yml = @"
-          version: $($env:APP_VERSION)
-          path: $exeName
-          sha512: $shaB64
-          releaseDate: $($env:APP_PUB_DATE)
-          files:
-            - url: $exeName
-              sha512: $shaB64
-              size: $size
-          "@
-
-            $yml | Set-Content -Path $manifestPath -Encoding utf8
-            Write-Host "Generated $manifestName for desktopci discovery"
+          if (Test-Path $dist) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.yml" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip.blockmap" "upload_staging\"
           }
 
           Get-ChildItem -Force upload_staging | Format-Table -AutoSize
@@ -369,7 +310,6 @@ jobs:
           cp -f "$DIST"/*.AppImage upload_staging/ 2>/dev/null || true
           cp -f "$DIST"/*.deb upload_staging/ 2>/dev/null || true
           cp -f "$DIST"/*.tar.gz upload_staging/ 2>/dev/null || true
-          cp -f "$DIST"/*.yml upload_staging/ 2>/dev/null || true
 
           ls -la upload_staging/
 
@@ -380,7 +320,6 @@ jobs:
           cd upload_staging
           [[ "${{ matrix.platform }}" == "macos" && -f latest-mac.yml && ! -f latest-mac-arm64.yml ]] && mv latest-mac.yml latest-mac-arm64.yml || true
           [[ "${{ matrix.platform }}" == "windows" && -f latest.yml && ! -f latest-arm64.yml ]] && mv latest.yml latest-arm64.yml || true
-          [[ "${{ matrix.platform }}" == "linux" && -f latest-linux.yml && ! -f latest-linux-arm64.yml ]] && mv latest-linux.yml latest-linux-arm64.yml || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

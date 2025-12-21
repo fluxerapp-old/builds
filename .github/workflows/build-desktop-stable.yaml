@@ -337,8 +337,10 @@ jobs:
 
           $dist = Join-Path $env:APP_WORKDIR "dist-electron"
           $sqDirName = if ("${{ matrix.arch }}" -eq "arm64") { "squirrel-windows-arm64" } else { "squirrel-windows" }
+          $sqFallbackName = if ($sqDirName -eq "squirrel-windows") { "squirrel-windows-arm64" } else { "squirrel-windows" }
+
           $sq = Join-Path $dist $sqDirName
-          $sqFallback = Join-Path $dist (if ($sqDirName -eq "squirrel-windows") { "squirrel-windows-arm64" } else { "squirrel-windows" })
+          $sqFallback = Join-Path $dist $sqFallbackName
 
           $picked = $null
           if (Test-Path $sq) { $picked = $sq }

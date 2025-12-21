@@ -265,10 +265,9 @@ jobs:
           MAX_WINDOWS_PATH_LEN: 260
           PATH_HEADROOM: 10
         run: |
-          $dirs = @(
-            "dist-electron/squirrel-windows",
-            "dist-electron/squirrel-windows-arm64"
-          )
+          $primaryDir = if ("${{ matrix.arch }}" -eq "arm64") { "dist-electron/squirrel-windows-arm64" } else { "dist-electron/squirrel-windows" }
+          $fallbackDir = if ("${{ matrix.arch }}" -eq "arm64") { "dist-electron/squirrel-windows" } else { "dist-electron/squirrel-windows-arm64" }
+          $dirs = @($primaryDir, $fallbackDir)
 
           $nupkg = $null
           foreach ($d in $dirs) {
@@ -337,20 +336,30 @@ jobs:
           New-Item -ItemType Directory -Force upload_staging | Out-Null
 
           $dist = Join-Path $env:APP_WORKDIR "dist-electron"
-          $sq = Join-Path $dist "squirrel-windows"
+          $sqDirName = if ("${{ matrix.arch }}" -eq "arm64") { "squirrel-windows-arm64" } else { "squirrel-windows" }
+          $sq = Join-Path $dist $sqDirName
+          $sqFallback = Join-Path $dist (if ($sqDirName -eq "squirrel-windows") { "squirrel-windows-arm64" } else { "squirrel-windows" })
 
-          if (Test-Path $sq) {
-            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe" "upload_staging\"
-            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe.blockmap" "upload_staging\"
-            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\RELEASES*" "upload_staging\"
-            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg" "upload_staging\"
-            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg.blockmap" "upload_staging\"
+          $picked = $null
+          if (Test-Path $sq) { $picked = $sq }
+          elseif (Test-Path $sqFallback) { $picked = $sqFallback }
+
+          if ($picked) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$picked\*.exe" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$picked\*.exe.blockmap" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$picked\RELEASES*" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$picked\*.nupkg" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$picked\*.nupkg.blockmap" "upload_staging\"
           }
 
           if (Test-Path $dist) {
             Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.yml" "upload_staging\"
             Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip" "upload_staging\"
             Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip.blockmap" "upload_staging\"
+          }
+
+          if (-not (Get-ChildItem upload_staging -Filter *.exe -ErrorAction SilentlyContinue)) {
+            throw "No installer .exe staged. Squirrel outputs were not copied."
           }
 
           Get-ChildItem -Force upload_staging | Format-Table -AutoSize
@@ -369,6 +378,7 @@ jobs:
 
           cp -f "$DIST"/*.AppImage upload_staging/ 2>/dev/null || true
           cp -f "$DIST"/*.deb upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.rpm upload_staging/ 2>/dev/null || true
           cp -f "$DIST"/*.tar.gz upload_staging/ 2>/dev/null || true
 
           ls -la upload_staging/
@@ -392,6 +402,7 @@ jobs:
             upload_staging/*.zip.blockmap
             upload_staging/*.AppImage
             upload_staging/*.deb
+            upload_staging/*.rpm
             upload_staging/*.tar.gz
             upload_staging/*.yml
             upload_staging/*.nupkg

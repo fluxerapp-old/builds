@@ -265,9 +265,21 @@ jobs:
           MAX_WINDOWS_PATH_LEN: 260
           PATH_HEADROOM: 10
         run: |
-          $nupkg = Get-ChildItem -Path "dist-electron/squirrel-windows/*.nupkg" | Select-Object -First 1
+          $dirs = @(
+            "dist-electron/squirrel-windows",
+            "dist-electron/squirrel-windows-arm64"
+          )
+
+          $nupkg = $null
+          foreach ($d in $dirs) {
+            if (Test-Path $d) {
+              $nupkg = Get-ChildItem -Path "$d/*.nupkg" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($nupkg) { break }
+            }
+          }
+
           if (-not $nupkg) {
-            throw "No Squirrel nupkg found in dist-electron/squirrel-windows"
+            throw "No Squirrel nupkg found in: $($dirs -join ', ')"
           }
 
           Write-Host "Analyzing Windows installer $($nupkg.FullName)"

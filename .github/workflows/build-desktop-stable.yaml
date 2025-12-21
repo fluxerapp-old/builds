@@ -226,7 +226,6 @@ jobs:
         run: |
           cd upload_staging
           [[ "${{ matrix.platform }}" == "macos" && -f latest-mac.yml && ! -f latest-mac-arm64.yml ]] && mv latest-mac.yml latest-mac-arm64.yml || true
-          [[ "${{ matrix.platform }}" == "windows" && -f latest.yml && ! -f latest-arm64.yml ]] && mv latest.yml latest-arm64.yml || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

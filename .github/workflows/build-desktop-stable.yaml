@@ -114,6 +114,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    env:
+      APP_WORKDIR: fluxer_app
     steps:
       - name: Checkout source (Unix)
         if: runner.os != 'Windows'
@@ -131,6 +133,29 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
+      - name: Shorten Windows paths (workspace + temp for Squirrel) and pin pnpm store
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          subst W: "$env:GITHUB_WORKSPACE"
+          "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          New-Item -ItemType Directory -Force "C:\t"        | Out-Null
+          New-Item -ItemType Directory -Force "C:\sq"       | Out-Null
+          New-Item -ItemType Directory -Force "C:\ebcache"  | Out-Null
+          "TEMP=C:\t"               | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:\t"                | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SQUIRREL_TEMP=C:\sq"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          New-Item -ItemType Directory -Force "C:\pnpm-store" | Out-Null
+          "NPM_CONFIG_STORE_DIR=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "npm_config_store_dir=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          "store-dir=C:\pnpm-store" | Set-Content -Path "W:\.npmrc" -Encoding ascii
+
+          git config --global core.longpaths true
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -140,8 +165,30 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: fluxer_app/pnpm-lock.yaml
+
+      - name: Resolve pnpm store path (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $store = pnpm store path --silent
+          "PNPM_STORE_PATH=$store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          New-Item -ItemType Directory -Force $store | Out-Null
+
+      - name: Resolve pnpm store path (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          store="$(pnpm store path --silent)"
+          echo "PNPM_STORE_PATH=$store" >> "$GITHUB_ENV"
+          mkdir -p "$store"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -173,22 +220,22 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Install dependencies
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         run: pnpm install --frozen-lockfile
 
       - name: Update version
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         run: pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build Electron main process
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: stable
         run: pnpm electron:compile
 
       - name: Build Electron app (macOS)
         if: matrix.platform == 'macos'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: stable
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
@@ -200,14 +247,18 @@ jobs:
 
       - name: Build Electron app (Windows)
         if: matrix.platform == 'windows'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: stable
+          TEMP: C:\t
+          TMP: C:\t
+          SQUIRREL_TEMP: C:\sq
+          ELECTRON_BUILDER_CACHE: C:\ebcache
         run: pnpm exec electron-builder --config electron-builder.yaml --win --${{ matrix.electron_arch }}
 
       - name: Analyze Squirrel nupkg for long paths
         if: matrix.platform == 'windows'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         shell: pwsh
         env:
           BUILD_VERSION: ${{ needs.version.outputs.version }}
@@ -218,54 +269,96 @@ jobs:
           if (-not $nupkg) {
             throw "No Squirrel nupkg found in dist-electron/squirrel-windows"
           }
+
           Write-Host "Analyzing Windows installer $($nupkg.FullName)"
           $env:NUPKG_PATH = $nupkg.FullName
-          python - <<'PY'
-          import os
-          import zipfile
 
-          path = os.environ["NUPKG_PATH"]
-          build_ver = os.environ["BUILD_VERSION"]
-          prefix = os.path.join(os.environ["LOCALAPPDATA"], "fluxer_app", f"app-{build_ver}", "resources", "app.asar.unpacked")
-          max_len = int(os.environ.get("MAX_WINDOWS_PATH_LEN", "260"))
-          headroom = int(os.environ.get("PATH_HEADROOM", "10"))
-          limit = max_len - headroom
+          $lines = @(
+            'import os'
+            'import zipfile'
+            ''
+            'path = os.environ["NUPKG_PATH"]'
+            'build_ver = os.environ["BUILD_VERSION"]'
+            'prefix = os.path.join(os.environ["LOCALAPPDATA"], "fluxer_app", f"app-{build_ver}", "resources", "app.asar.unpacked")'
+            'max_len = int(os.environ.get("MAX_WINDOWS_PATH_LEN", "260"))'
+            'headroom = int(os.environ.get("PATH_HEADROOM", "10"))'
+            'limit = max_len - headroom'
+            ''
+            'with zipfile.ZipFile(path) as archive:'
+            '    entries = []'
+            '    for info in archive.infolist():'
+            '        normalized = info.filename.lstrip("/\\\\")'
+            '        total_len = len(os.path.join(prefix, normalized)) if normalized else len(prefix)'
+            '        entries.append((total_len, info.filename))'
+            ''
+            'if not entries:'
+            '    raise SystemExit("nupkg archive contains no entries")'
+            ''
+            'entries.sort(reverse=True)'
+            'print(f"Assumed install prefix: {prefix} ({len(prefix)} chars). Maximum allowed path length: {limit} (total reserve {max_len}, headroom {headroom}).")'
+            'print("Top 20 longest archived paths (length includes prefix):")'
+            'for length, name in entries[:20]:'
+            '    print(f"{length:4d} {name}")'
+            ''
+            'longest_len, longest_name = entries[0]'
+            'if longest_len > limit:'
+            '    raise SystemExit(f"Longest path {longest_len} for {longest_name} exceeds limit {limit}")'
+            'print(f"Longest archived path {longest_len} is within the limit of {limit}.")'
+          )
 
-          with zipfile.ZipFile(path) as archive:
-              entries = []
-              for info in archive.infolist():
-                  normalized = info.filename.lstrip("/\\")
-                  total_len = len(os.path.join(prefix, normalized)) if normalized else len(prefix)
-                  entries.append((total_len, info.filename))
-
-          if not entries:
-              raise SystemExit("nupkg archive contains no entries")
-
-          entries.sort(reverse=True)
-          print(f"Assumed install prefix: {prefix} ({len(prefix)} chars). Maximum allowed path length: {limit} (total reserve {max_len}, headroom {headroom}).")
-          print("Top 20 longest archived paths (length includes prefix):")
-          for length, name in entries[:20]:
-              print(f"{length:4d} {name}")
-
-          longest_len, longest_name = entries[0]
-          if longest_len > limit:
-              raise SystemExit(f"Longest path {longest_len} for {longest_name} exceeds limit {limit}")
-          print(f"Longest archived path {longest_len} is within the limit of {limit}.")
-          PY
+          $scriptPath = Join-Path $env:TEMP "nupkg-long-path-check.py"
+          Set-Content -Path $scriptPath -Value $lines -Encoding utf8
+          python $scriptPath
 
       - name: Build Electron app (Linux)
         if: matrix.platform == 'linux'
-        working-directory: fluxer_app
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: stable
           USE_SYSTEM_FPM: true
         run: pnpm exec electron-builder --config electron-builder.yaml --linux --${{ matrix.electron_arch }}
 
-      - name: Prepare artifacts
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force upload_staging | Out-Null
+
+          $dist = Join-Path $env:APP_WORKDIR "dist-electron"
+          $sq = Join-Path $dist "squirrel-windows"
+
+          if (Test-Path $sq) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.exe.blockmap" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\RELEASES*" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$sq\*.nupkg.blockmap" "upload_staging\"
+          }
+
+          if (Test-Path $dist) {
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.yml" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip" "upload_staging\"
+            Copy-Item -Force -ErrorAction SilentlyContinue "$dist\*.zip.blockmap" "upload_staging\"
+          }
+
+          Get-ChildItem -Force upload_staging | Format-Table -AutoSize
+
+      - name: Prepare artifacts (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p upload_staging
-          [ -d "fluxer_app/dist-electron" ] && cp -r fluxer_app/dist-electron/* upload_staging/ || true
+          DIST="${{ env.APP_WORKDIR }}/dist-electron"
+
+          cp -f "$DIST"/*.dmg upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.zip upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.zip.blockmap upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.yml upload_staging/ 2>/dev/null || true
+
+          cp -f "$DIST"/*.AppImage upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.deb upload_staging/ 2>/dev/null || true
+          cp -f "$DIST"/*.tar.gz upload_staging/ 2>/dev/null || true
+
           ls -la upload_staging/
 
       - name: Normalize updater YAML (arm64)

@@ -194,7 +194,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache-dependency-path: fluxer_app/scripts/go.sum
+          cache-dependency-path: fluxer_app/scripts/cmd/desktopci/go.sum
 
       - name: Install Python setuptools (Windows ARM64)
         if: matrix.platform == 'windows' && matrix.arch == 'arm64'

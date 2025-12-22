@@ -28,19 +28,19 @@ permissions:
   contents: write
 
 concurrency:
-  group: "desktop-canary-${{ inputs.ref || 'canary' }}"
+  group: desktop-canary-${{ inputs.ref || 'canary' }}
   cancel-in-progress: true
 
 env:
   CHANNEL: canary
-  SOURCE_REF: "${{ inputs.ref || 'canary' }}"
+  SOURCE_REF: ${{ inputs.ref || 'canary' }}
 
 jobs:
   matrix:
     name: Resolve build matrix
     runs-on: ubuntu-24.04
     outputs:
-      matrix: '${{ steps.set-matrix.outputs.matrix }}'
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Build platform matrix
         id: set-matrix
@@ -54,7 +54,7 @@ jobs:
             {"platform":"linux","arch":"arm64","os":"ubuntu-24.04-arm","electron_arch":"arm64"}
           ]'
 
-          FILTERED=$(echo "$PLATFORMS" | jq -c \
+          FILTERED="$(echo "$PLATFORMS" | jq -c \
             --argjson skipWin '${{ inputs.skip_windows }}' \
             --argjson skipMac '${{ inputs.skip_macos }}' \
             --argjson skipLinux '${{ inputs.skip_linux }}' '
@@ -65,7 +65,7 @@ jobs:
                   ((.platform == "linux") and $skipLinux)
                 ) | not
               )]
-            ')
+            ')"
 
           echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
 
@@ -73,8 +73,8 @@ jobs:
     name: Bump canary version
     runs-on: ubuntu-24.04
     outputs:
-      version: '${{ steps.bump.outputs.version }}'
-      pub_date: '${{ steps.bump.outputs.pub_date }}'
+      version: ${{ steps.bump.outputs.version }}
+      pub_date: ${{ steps.bump.outputs.pub_date }}
     steps:
       - name: Checkout builds repository
         uses: actions/checkout@v6
@@ -87,15 +87,15 @@ jobs:
           TAG_PREFIX="desktop-canary-v"
           git fetch --tags --force
 
-          LATEST=$(git tag -l "${TAG_PREFIX}0.0.*" --sort=-v:refname | head -n1)
+          LATEST="$(git tag -l "${TAG_PREFIX}0.0.*" --sort=-v:refname | head -n1)"
           NUM=0
           if [ -n "$LATEST" ]; then
-            NUM=$(echo "$LATEST" | sed "s/${TAG_PREFIX}0.0.//" | cut -d. -f1)
+            NUM="$(echo "$LATEST" | sed "s/${TAG_PREFIX}0.0.//" | cut -d. -f1)"
           fi
           NUM=$((NUM + 1))
 
           VERSION="0.0.${NUM}"
-          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "pub_date=$PUB_DATE" >> "$GITHUB_OUTPUT"
@@ -112,12 +112,12 @@ jobs:
           echo "Created tag: $TAG_NAME"
 
   build:
-    name: 'Build ${{ matrix.platform }} (${{ matrix.arch }})'
+    name: Build ${{ matrix.platform }} (${{ matrix.arch }})
     needs: [version, matrix]
-    runs-on: '${{ matrix.os }}'
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix: '${{ fromJson(needs.matrix.outputs.matrix) }}'
+      matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     env:
       APP_WORKDIR: fluxer_app
     steps:
@@ -126,16 +126,16 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
-          ref: '${{ env.SOURCE_REF }}'
-          ssh-key: '${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}'
+          ref: ${{ env.SOURCE_REF }}
+          ssh-key: ${{ secrets.FLUXER_PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Checkout source (Windows)
         if: runner.os == 'Windows'
         uses: actions/checkout@v6
         with:
           repository: fluxerapp-old/fluxer
-          ref: '${{ env.SOURCE_REF }}'
-          token: '${{ secrets.FLUXER_PRIVATE_REPO_PAT }}'
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.FLUXER_PRIVATE_REPO_PAT }}
 
       - name: Shorten Windows paths (workspace + temp for Squirrel) and pin pnpm store
         if: runner.os == 'Windows'
@@ -144,12 +144,12 @@ jobs:
           subst W: "$env:GITHUB_WORKSPACE"
           "APP_WORKDIR=W:\fluxer_app" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          New-Item -ItemType Directory -Force "C:\t"       | Out-Null
-          New-Item -ItemType Directory -Force "C:\sq"      | Out-Null
+          New-Item -ItemType Directory -Force "C:\t" | Out-Null
+          New-Item -ItemType Directory -Force "C:\sq" | Out-Null
           New-Item -ItemType Directory -Force "C:\ebcache" | Out-Null
-          "TEMP=C:\t"                     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "TMP=C:\t"                      | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "SQUIRREL_TEMP=C:\sq"           | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=C:\t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=C:\t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SQUIRREL_TEMP=C:\sq" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ELECTRON_BUILDER_CACHE=C:\ebcache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
           New-Item -ItemType Directory -Force "C:\pnpm-store" | Out-Null
@@ -157,7 +157,6 @@ jobs:
           "npm_config_store_dir=C:\pnpm-store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
           "store-dir=C:\pnpm-store" | Set-Content -Path "W:\.npmrc" -Encoding ascii
-
           git config --global core.longpaths true
 
       - name: Set up pnpm
@@ -189,8 +188,8 @@ jobs:
       - name: Cache pnpm store
         uses: actions/cache@v4
         with:
-          path: '${{ env.PNPM_STORE_PATH }}'
-          key: "${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}"
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
@@ -218,48 +217,48 @@ jobs:
           sudo gem install --no-document fpm
 
       - name: Install dependencies
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         run: pnpm install --frozen-lockfile
 
       - name: Update version
-        working-directory: '${{ env.APP_WORKDIR }}'
-        run: 'pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version'
+        working-directory: ${{ env.APP_WORKDIR }}
+        run: pnpm version ${{ needs.version.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build Electron main process
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
         run: pnpm electron:compile
 
       - name: Build Electron app (macOS)
         if: matrix.platform == 'macos'
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
-          CSC_LINK: '${{ secrets.APPLE_CERTIFICATE }}'
-          CSC_KEY_PASSWORD: '${{ secrets.APPLE_CERTIFICATE_PASSWORD }}'
-          APPLE_ID: '${{ secrets.APPLE_ID }}'
-          APPLE_APP_SPECIFIC_PASSWORD: '${{ secrets.APPLE_PASSWORD }}'
-          APPLE_TEAM_ID: '${{ secrets.APPLE_TEAM_ID }}'
-        run: 'pnpm exec electron-builder --config electron-builder.canary.yaml --mac --${{ matrix.electron_arch }}'
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm exec electron-builder --config electron-builder.canary.yaml --mac --${{ matrix.electron_arch }}
 
       - name: Build Electron app (Windows)
         if: matrix.platform == 'windows'
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
           TEMP: C:\t
           TMP: C:\t
           SQUIRREL_TEMP: C:\sq
           ELECTRON_BUILDER_CACHE: C:\ebcache
-        run: 'pnpm exec electron-builder --config electron-builder.canary.yaml --win --${{ matrix.electron_arch }}'
+        run: pnpm exec electron-builder --config electron-builder.canary.yaml --win --${{ matrix.electron_arch }}
 
       - name: Analyze Squirrel nupkg for long paths
         if: matrix.platform == 'windows'
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         shell: pwsh
         env:
-          BUILD_VERSION: '${{ needs.version.outputs.version }}'
+          BUILD_VERSION: ${{ needs.version.outputs.version }}
           MAX_WINDOWS_PATH_LEN: 260
           PATH_HEADROOM: 10
         run: |
@@ -321,11 +320,11 @@ jobs:
 
       - name: Build Electron app (Linux)
         if: matrix.platform == 'linux'
-        working-directory: '${{ env.APP_WORKDIR }}'
+        working-directory: ${{ env.APP_WORKDIR }}
         env:
           BUILD_CHANNEL: canary
           USE_SYSTEM_FPM: true
-        run: 'pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}'
+        run: pnpm exec electron-builder --config electron-builder.canary.yaml --linux --${{ matrix.electron_arch }}
 
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
@@ -393,7 +392,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: 'fluxer-desktop-canary-${{ matrix.platform }}-${{ matrix.arch }}'
+          name: fluxer-desktop-canary-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             upload_staging/*.exe
             upload_staging/*.exe.blockmap
@@ -419,8 +418,8 @@ jobs:
       S3_ENDPOINT: https://s3.us-east-va.io.cloud.ovh.us
       S3_BUCKET: fluxer-downloads
       PUBLIC_DL_BASE: https://api.fluxer.app/dl
-      AWS_ACCESS_KEY_ID: '${{ secrets.AWS_ACCESS_KEY_ID }}'
-      AWS_SECRET_ACCESS_KEY: '${{ secrets.AWS_SECRET_ACCESS_KEY }}'
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -448,10 +447,10 @@ jobs:
           acl = private
           RCLONEEOF
 
-      - name: Build S3 payload layout
+      - name: Build S3 payload layout (+ manifest.json)
         env:
-          VERSION: '${{ needs.version.outputs.version }}'
-          PUB_DATE: '${{ needs.version.outputs.pub_date }}'
+          VERSION: ${{ needs.version.outputs.version }}
+          PUB_DATE: ${{ needs.version.outputs.pub_date }}
         run: |
           set -euo pipefail
 
@@ -472,8 +471,8 @@ jobs:
 
             case "$platform" in
               windows) plat="win32" ;;
-              macos)   plat="darwin" ;;
-              linux)   plat="linux" ;;
+              macos) plat="darwin" ;;
+              linux) plat="linux" ;;
               *)
                 echo "Unknown platform: $platform"
                 continue
@@ -490,15 +489,14 @@ jobs:
                 zip_file="$z"
                 break
               done
+
               if [[ -z "$zip_file" ]]; then
                 echo "No .zip found for macOS $arch in $dest (auto-update requires zip artifacts)."
-                continue
-              fi
+              else
+                zip_name="$(basename "$zip_file")"
+                url="${PUBLIC_DL_BASE}/desktop/${CHANNEL}/${plat}/${arch}/${zip_name}"
 
-              zip_name="$(basename "$zip_file")"
-              url="${PUBLIC_DL_BASE}/desktop/${CHANNEL}/${plat}/${arch}/${zip_name}"
-
-              cat > "$dest/RELEASES.json" <<EOF
+                cat > "$dest/RELEASES.json" <<EOF
           {
             "currentRelease": "${VERSION}",
             "releases": [
@@ -515,12 +513,70 @@ jobs:
             ]
           }
           EOF
-              cp -f "$dest/RELEASES.json" "$dest/releases.json"
+                cp -f "$dest/RELEASES.json" "$dest/releases.json"
+              fi
             fi
+
+            setup_file=""
+            dmg_file=""
+            zip_file2=""
+            appimage_file=""
+            deb_file=""
+            rpm_file=""
+            targz_file=""
+
+            if [[ "$plat" == "win32" ]]; then
+              setup_file="$(ls -1 "$dest"/*.exe 2>/dev/null | grep -i 'setup' | head -n1 || true)"
+              if [[ -z "$setup_file" ]]; then
+                setup_file="$(ls -1 "$dest"/*.exe 2>/dev/null | head -n1 || true)"
+              fi
+            fi
+
+            if [[ "$plat" == "darwin" ]]; then
+              dmg_file="$(ls -1 "$dest"/*.dmg 2>/dev/null | head -n1 || true)"
+              zip_file2="$(ls -1 "$dest"/*.zip 2>/dev/null | head -n1 || true)"
+            fi
+
+            if [[ "$plat" == "linux" ]]; then
+              appimage_file="$(ls -1 "$dest"/*.AppImage 2>/dev/null | head -n1 || true)"
+              deb_file="$(ls -1 "$dest"/*.deb 2>/dev/null | head -n1 || true)"
+              rpm_file="$(ls -1 "$dest"/*.rpm 2>/dev/null | head -n1 || true)"
+              targz_file="$(ls -1 "$dest"/*.tar.gz 2>/dev/null | head -n1 || true)"
+            fi
+
+            jq -n \
+              --arg channel "${CHANNEL}" \
+              --arg platform "${plat}" \
+              --arg arch "${arch}" \
+              --arg version "${VERSION}" \
+              --arg pub_date "${PUB_DATE}" \
+              --arg setup "$(basename "${setup_file:-}")" \
+              --arg dmg "$(basename "${dmg_file:-}")" \
+              --arg zip "$(basename "${zip_file2:-}")" \
+              --arg appimage "$(basename "${appimage_file:-}")" \
+              --arg deb "$(basename "${deb_file:-}")" \
+              --arg rpm "$(basename "${rpm_file:-}")" \
+              --arg tar_gz "$(basename "${targz_file:-}")" \
+              '{
+                channel: $channel,
+                platform: $platform,
+                arch: $arch,
+                version: $version,
+                pub_date: $pub_date,
+                files: {
+                  setup: $setup,
+                  dmg: $dmg,
+                  zip: $zip,
+                  appimage: $appimage,
+                  deb: $deb,
+                  rpm: $rpm,
+                  tar_gz: $tar_gz
+                }
+              }' > "$dest/manifest.json"
           done
 
           echo "Payload tree:"
-          find s3_payload -maxdepth 5 -type f | sort
+          find s3_payload -maxdepth 6 -type f | sort
 
       - name: Upload payload to S3
         run: |
@@ -541,4 +597,6 @@ jobs:
             echo "**Version:** ${{ needs.version.outputs.version }}"
             echo ""
             echo "**S3 prefix:** desktop/${CHANNEL}/"
+            echo ""
+            echo "**Redirect endpoint shape:** /dl/desktop/${CHANNEL}/{plat}/{arch}/{format}"
           } >> "$GITHUB_STEP_SUMMARY"

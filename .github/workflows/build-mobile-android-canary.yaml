@@ -71,7 +71,7 @@ jobs:
       - name: Set up Android SDK (cmdline-tools + licenses)
         uses: android-actions/setup-android@v3
         with:
-          packages: ""
+          packages: ''
 
       - name: Ensure Android SDK packages (idempotent)
         working-directory: ${{ github.workspace }}

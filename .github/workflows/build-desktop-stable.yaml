@@ -23,6 +23,36 @@ on:
         required: false
         default: false
         type: boolean
+      skip_windows_x64:
+        description: Skip Windows x64 builds
+        required: false
+        default: false
+        type: boolean
+      skip_windows_arm64:
+        description: Skip Windows ARM64 builds
+        required: false
+        default: false
+        type: boolean
+      skip_macos_x64:
+        description: Skip macOS x64 builds
+        required: false
+        default: false
+        type: boolean
+      skip_macos_arm64:
+        description: Skip macOS ARM64 builds
+        required: false
+        default: false
+        type: boolean
+      skip_linux_x64:
+        description: Skip Linux x64 builds
+        required: false
+        default: false
+        type: boolean
+      skip_linux_arm64:
+        description: Skip Linux ARM64 builds
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -56,13 +86,31 @@ jobs:
 
           FILTERED="$(echo "$PLATFORMS" | jq -c \
             --argjson skipWin '${{ inputs.skip_windows }}' \
+            --argjson skipWinX64 '${{ inputs.skip_windows_x64 }}' \
+            --argjson skipWinArm '${{ inputs.skip_windows_arm64 }}' \
             --argjson skipMac '${{ inputs.skip_macos }}' \
-            --argjson skipLinux '${{ inputs.skip_linux }}' '
+            --argjson skipMacX64 '${{ inputs.skip_macos_x64 }}' \
+            --argjson skipMacArm '${{ inputs.skip_macos_arm64 }}' \
+            --argjson skipLinux '${{ inputs.skip_linux }}' \
+            --argjson skipLinuxX64 '${{ inputs.skip_linux_x64 }}' \
+            --argjson skipLinuxArm '${{ inputs.skip_linux_arm64 }}' '
               [.[] | select(
                 (
-                  ((.platform == "windows") and $skipWin) or
-                  ((.platform == "macos") and $skipMac) or
-                  ((.platform == "linux") and $skipLinux)
+                  ((.platform == "windows") and (
+                    $skipWin or
+                    ((.arch == "x64") and $skipWinX64) or
+                    ((.arch == "arm64") and $skipWinArm)
+                  )) or
+                  ((.platform == "macos") and (
+                    $skipMac or
+                    ((.arch == "x64") and $skipMacX64) or
+                    ((.arch == "arm64") and $skipMacArm)
+                  )) or
+                  ((.platform == "linux") and (
+                    $skipLinux or
+                    ((.arch == "x64") and $skipLinuxX64) or
+                    ((.arch == "arm64") and $skipLinuxArm)
+                  ))
                 ) | not
               )]
             ')"

@@ -124,40 +124,14 @@ jobs:
       version: ${{ steps.bump.outputs.version }}
       pub_date: ${{ steps.bump.outputs.pub_date }}
     steps:
-      - name: Checkout builds repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
       - name: Calculate next version
         id: bump
         run: |
-          TAG_PREFIX="desktop-stable-v"
-          git fetch --tags --force
-
-          LATEST="$(git tag -l "${TAG_PREFIX}0.0.*" --sort=-v:refname | head -n1)"
-          NUM=0
-          if [ -n "$LATEST" ]; then
-            NUM="$(echo "$LATEST" | sed "s/${TAG_PREFIX}0.0.//" | cut -d. -f1)"
-          fi
-          NUM=$((NUM + 1))
-
-          VERSION="0.0.${NUM}"
+          VERSION="0.0.${GITHUB_RUN_NUMBER}"
           PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "pub_date=$PUB_DATE" >> "$GITHUB_OUTPUT"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          TAG_NAME="${TAG_PREFIX}${VERSION}"
-          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            git tag "$TAG_NAME"
-            git push origin "$TAG_NAME"
-          fi
-
-          echo "Created tag: $TAG_NAME"
 
   build:
     name: Build ${{ matrix.platform }} (${{ matrix.arch }})
